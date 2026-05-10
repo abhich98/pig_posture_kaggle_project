@@ -1,0 +1,13 @@
+[project]
+name = "pig-posture-kaggle-project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ipykernel==6.30",
+    "opencv-contrib-python-headless>=4.13.0.92",
+    "pandas>=3.0.2",
+    "seaborn>=0.13.2",
+    "tqdm>=4.67.3",
+]
