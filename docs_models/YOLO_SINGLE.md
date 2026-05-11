@@ -1,0 +1,5 @@
+- Use yolo11n or yolo11s or another small yolo model.
+- Test and validate it on train2 dataset.
+- Just for baseline, we already know that this is not good enough.
+- YOlO uses 'top1 accuracy' for training classifier models, a final macro F1 metric needs to be used for evaluation.
+- 

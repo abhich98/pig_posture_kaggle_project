@@ -1,0 +1,36 @@
+data:
+  train_csv: "<ABS_PATH_TO_DATASET>/train2.csv"
+  test_csv: "<ABS_PATH_TO_DATASET>/test.csv"
+  train_image_dir: "<ABS_PATH_TO_DATASET>/train2_images"
+  test_image_dir: "<ABS_PATH_TO_DATASET>/test_images"
+  img_size: 224
+  pad: 10
+
+split:
+  seed: 42
+  single_val_ratio: 0.2
+  n_folds: 5
+
+model:
+  weights: "yolo11n-cls.pt"
+
+train:
+  epochs: 40
+  imgsz: 224
+  batch: 32
+  device: 0
+  workers: 2
+  seed: 42
+  fliplr: 0.0
+  flipud: 0.0
+
+wandb:
+  enabled: true
+  project: "pig-posture-kaggle-SSL"
+  entity: null
+  mode: "online"
+  tags: ["yolo", "local", "train2"]
+
+output:
+  root: "outputs"
+  run_name: "train2_local_run"

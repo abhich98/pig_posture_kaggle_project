@@ -1,0 +1,36 @@
+data:
+  train_csv: "/kaggle/input/multi-view-pig-posture-recognition/multiview_pig_posture_recognition/train2.csv"
+  test_csv: "/kaggle/input/multi-view-pig-posture-recognition/multiview_pig_posture_recognition/test.csv"
+  train_image_dir: "/kaggle/input/multi-view-pig-posture-recognition/multiview_pig_posture_recognition/train2_images"
+  test_image_dir: "/kaggle/input/multi-view-pig-posture-recognition/multiview_pig_posture_recognition/test_images"
+  img_size: 224
+  pad: 10
+
+split:
+  seed: 42
+  single_val_ratio: 0.2
+  n_folds: 5
+
+model:
+  weights: "yolo11n-cls.pt"
+
+train:
+  epochs: 40
+  imgsz: 224
+  batch: 64
+  device: 0
+  workers: 2
+  seed: 42
+  fliplr: 0.0
+  flipud: 0.0
+
+wandb:
+  enabled: true
+  project: "pig-posture-kaggle-SSL"
+  entity: null
+  mode: "online"
+  tags: ["yolo", "train2", "classification"]
+
+output:
+  root: "outputs"
+  run_name: "train2_baseline"
