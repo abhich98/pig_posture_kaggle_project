@@ -1,0 +1,21 @@
+#Class ID 	Posture Name
+0:	
+  pos_name: "Lateral_lying left"
+  color: "red"
+1:	
+  pos_name: "Lateral_lying right"
+  color: "blue"
+2:	
+  pos_name: "Sitting"
+  color: "green"
+  desc: "Pig is in a sitting position, with its body upright and folded hind legs. The front legs may be straight or slightly bent."
+3:	
+  pos_name: "Standing"
+  color: "yellow"
+4:	
+  pos_name: "Sternal_lying"
+  color: "purple"
+  desc: "Pig is lying on its sternum, with its body supported by its chest and abdomen. The legs may be tucked under the body or extended on both sides."
+10:	
+  pos_name: "UNKNOWN"
+  color: "black"
