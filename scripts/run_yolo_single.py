@@ -3,12 +3,21 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import logging
 
 import pandas as pd
 
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
 from pig_pipeline.training.yolo import evaluate_on_split, load_yolo_model, predict_test_top1, train_classifier
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+logger = logging.getLogger("yolo_single_training")
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,8 +61,8 @@ def main() -> None:
     tracker.log_file("single_metrics", metrics_path)
     tracker.log_file("single_submission", submission_path)
 
-    print(f"Best checkpoint: {best_pt}")
-    print(f"Submission: {submission_path}")
+    logger.info(f"Best checkpoint: {best_pt}")
+    logger.info(f"Submission: {submission_path}")
     tracker.finish()
 
 

@@ -5,6 +5,7 @@ data:
   test_image_dir: "<ABS_PATH_TO_DATASET>/test_images"
   img_size: 224
   pad: 10
+  prep_n_jobs: 1
 
 split:
   seed: 42
@@ -16,7 +17,7 @@ model:
 
 train:
   epochs: 40
-  imgsz: 224
+  imgsz: 320
   batch: 32
   device: 0
   workers: 2

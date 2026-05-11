@@ -5,6 +5,7 @@ data:
   test_image_dir: "/kaggle/input/multi-view-pig-posture-recognition/multiview_pig_posture_recognition/test_images"
   img_size: 224
   pad: 10
+  prep_n_jobs: 1
 
 split:
   seed: 42

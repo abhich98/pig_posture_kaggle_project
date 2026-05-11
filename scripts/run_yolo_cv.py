@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import logging
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,13 @@ from pig_pipeline.training.yolo import (
     predict_test_logits,
     train_classifier,
 )
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+logger = logging.getLogger("yolo_cv_training")
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,8 +100,8 @@ def main() -> None:
     aggregate_tracker.log_file("cv_submission", submission_path)
     aggregate_tracker.finish()
 
-    print(f"CV submission: {submission_path}")
-    print(f"Fold metrics: {fold_metrics_path}")
+    logger.info(f"CV submission: {submission_path}")
+    logger.info(f"Fold metrics: {fold_metrics_path}")
 
 
 if __name__ == "__main__":

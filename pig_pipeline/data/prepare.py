@@ -5,6 +5,7 @@ from typing import Any
 import shutil
 
 import cv2
+from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -59,6 +60,7 @@ def build_crop_metadata(
     img_size: int = 224,
     pad: int = 10,
     is_train: bool = True,
+    n_jobs: int = 1,
 ) -> pd.DataFrame:
     csv_path = Path(csv_path)
     image_dir = Path(image_dir)
@@ -71,37 +73,46 @@ def build_crop_metadata(
     df = pd.read_csv(csv_path)
     _validate_columns(df, is_train=is_train)
 
-    rows: list[dict[str, Any]] = []
-    image_cache: dict[str, np.ndarray] = {}
+    def process_group(image_id: str, group_df: pd.DataFrame) -> list[dict[str, Any]]:
+        image_path = image_dir / str(image_id)
+        image = _read_rgb(image_path)
+        group_rows: list[dict[str, Any]] = []
 
-    for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Crops:{csv_path.name}"):
-        image_path = image_dir / str(row["image_id"])
-        image_key = str(image_path)
+        for _, row in group_df.iterrows():
+            bbox = parse_bbox_string(str(row["bbox"]))
+            crop = _safe_crop(image, bbox.x, bbox.y, bbox.w, bbox.h, pad=pad)
+            crop = cv2.resize(crop, (img_size, img_size), interpolation=cv2.INTER_AREA)
 
-        if image_key not in image_cache:
-            image_cache[image_key] = _read_rgb(image_path)
-        image = image_cache[image_key]
+            row_id = str(row["row_id"])
+            class_id = int(row["class_id"]) if is_train else -1
 
-        bbox = parse_bbox_string(str(row["bbox"]))
-        crop = _safe_crop(image, bbox.x, bbox.y, bbox.w, bbox.h, pad=pad)
-        crop = cv2.resize(crop, (img_size, img_size), interpolation=cv2.INTER_AREA)
+            crop_name = f"{row_id}.jpg"
+            crop_path = crops_root / crop_name
+            ok = cv2.imwrite(str(crop_path), cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+            if not ok:
+                raise RuntimeError(f"Failed to write crop to {crop_path}")
 
-        row_id = str(row["row_id"])
-        class_id = int(row["class_id"]) if is_train else -1
+            group_rows.append(
+                {
+                    "row_id": row_id,
+                    "image_id": str(row["image_id"]),
+                    "class_id": class_id,
+                    "bbox": str(row["bbox"]),
+                    "crop_path": str(crop_path),
+                }
+            )
+        return group_rows
 
-        crop_name = f"{row_id}.jpg"
-        crop_path = crops_root / crop_name
-        cv2.imwrite(str(crop_path), cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+    n_jobs = int(n_jobs)
+    if n_jobs == 0:
+        raise ValueError("n_jobs cannot be 0. Use 1 for single-thread or -1 for all CPUs.")
 
-        rows.append(
-            {
-                "row_id": row_id,
-                "image_id": str(row["image_id"]),
-                "class_id": class_id,
-                "bbox": str(row["bbox"]),
-                "crop_path": str(crop_path),
-            }
-        )
+    grouped = list(df.groupby("image_id", sort=False))
+    results = Parallel(n_jobs=n_jobs, backend="threading", prefer="threads")(
+        delayed(process_group)(str(image_id), group_df)
+        for image_id, group_df in tqdm(grouped, total=len(grouped), desc=f"CropsParallel:{csv_path.name}")
+    )
+    rows: list[dict[str, Any]] = [row for group_rows in results for row in group_rows]
 
     out_df = pd.DataFrame(rows)
     out_df.to_csv(output_csv_path, index=False)
@@ -124,12 +135,30 @@ def _safe_link_or_copy(src: Path, dst: Path) -> None:
         raise RuntimeError(f"Missing source crop file: {src}") from e
 
 
-def materialize_yolo_classification_dir(split_df: pd.DataFrame, out_root: str | Path) -> None:
+def materialize_yolo_classification_dir(
+    split_df: pd.DataFrame,
+    out_root: str | Path,
+    n_jobs: int = 1,
+) -> None:
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    for _, row in split_df.iterrows():
-        class_id = int(row["class_id"])
-        src = Path(str(row["crop_path"]))
+    n_jobs = int(n_jobs)
+    if n_jobs == 0:
+        raise ValueError("n_jobs cannot be 0. Use 1 for single-thread or -1 for all CPUs.")
+
+    records: list[tuple[int, Path, Path]] = []
+    seen_dsts: set[Path] = set()
+    for row in split_df.itertuples(index=False):
+        class_id = int(getattr(row, "class_id"))
+        src = Path(str(getattr(row, "crop_path")))
         dst = out_root / str(class_id) / src.name
-        _safe_link_or_copy(src, dst)
+        if dst in seen_dsts:
+            raise ValueError(f"Duplicate destination path detected during materialization: {dst}")
+        seen_dsts.add(dst)
+        records.append((class_id, src, dst))
+
+    Parallel(n_jobs=n_jobs, backend="threading", prefer="threads")(
+        delayed(_safe_link_or_copy)(src, dst)
+        for _, src, dst in tqdm(records, total=len(records), desc=f"Materialize:{out_root.name}")
+    )

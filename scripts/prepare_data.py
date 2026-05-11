@@ -51,6 +51,7 @@ def main() -> None:
         img_size=int(data_cfg["img_size"]),
         pad=int(data_cfg["pad"]),
         is_train=True,
+        n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
     )
     test_df = build_crop_metadata(
         csv_path=data_cfg["test_csv"],
@@ -60,6 +61,7 @@ def main() -> None:
         img_size=int(data_cfg["img_size"]),
         pad=int(data_cfg["pad"]),
         is_train=False,
+        n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
     )
 
     split_root = ensure_dir(run_root / "splits")
@@ -72,8 +74,8 @@ def main() -> None:
     )
 
     yolo_single_root = ensure_dir(run_root / "yolo_data" / "single")
-    materialize_yolo_classification_dir(single_train_df, yolo_single_root / "train")
-    materialize_yolo_classification_dir(single_val_df, yolo_single_root / "val")
+    materialize_yolo_classification_dir(single_train_df, yolo_single_root / "train", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
+    materialize_yolo_classification_dir(single_val_df, yolo_single_root / "val", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
 
     folds = build_cv_splits(
         train_df,
@@ -84,8 +86,8 @@ def main() -> None:
     yolo_cv_root = ensure_dir(run_root / "yolo_data" / "cv")
     for fold_train_df, fold_val_df, fold_idx in folds:
         fold_root = ensure_dir(yolo_cv_root / f"fold_{fold_idx}")
-        materialize_yolo_classification_dir(fold_train_df, fold_root / "train")
-        materialize_yolo_classification_dir(fold_val_df, fold_root / "val")
+        materialize_yolo_classification_dir(fold_train_df, fold_root / "train", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
+        materialize_yolo_classification_dir(fold_val_df, fold_root / "val", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
 
     summary = pd.DataFrame(
         {
