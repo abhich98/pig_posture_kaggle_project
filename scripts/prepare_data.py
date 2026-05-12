@@ -3,8 +3,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import logging
+import sys
+from pathlib import Path
 
 import pandas as pd
+
+repo_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(repo_root))
 
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.data.prepare import build_crop_metadata, materialize_yolo_classification_dir
@@ -34,7 +39,7 @@ def main() -> None:
     split_cfg = cfg["split"]
     out_cfg = cfg["output"]
 
-    run_root = ensure_dir(Path(out_cfg["root"]) / out_cfg["run_name"])
+    run_root = ensure_dir(Path(out_cfg["root"]).resolve() / out_cfg["run_name"])
     tracker = RunTracker(cfg, run_name=f"{out_cfg['run_name']}-prepare", group=out_cfg["run_name"])
     prep_root = ensure_dir(run_root / "prepared")
     crops_train = ensure_dir(prep_root / "crops" / "train")
@@ -42,6 +47,8 @@ def main() -> None:
 
     train_meta_path = prep_root / "train_metadata.csv"
     test_meta_path = prep_root / "test_metadata.csv"
+    logger.info("Crops train dir: %s", crops_train)
+    logger.info("Crops test dir: %s", crops_test)
 
     train_df = build_crop_metadata(
         csv_path=data_cfg["train_csv"],

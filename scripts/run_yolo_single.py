@@ -4,8 +4,13 @@ import argparse
 import json
 from pathlib import Path
 import logging
+import sys
+from pathlib import Path
 
 import pandas as pd
+
+repo_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(repo_root))
 
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker

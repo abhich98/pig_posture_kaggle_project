@@ -86,7 +86,7 @@ def build_crop_metadata(
             row_id = str(row["row_id"])
             class_id = int(row["class_id"]) if is_train else -1
 
-            crop_name = f"{row_id}.jpg"
+            crop_name = f"{row_id}.png"
             crop_path = crops_root / crop_name
             ok = cv2.imwrite(str(crop_path), cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
             if not ok:
