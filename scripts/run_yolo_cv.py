@@ -16,9 +16,11 @@ sys.path.insert(0, str(repo_root))
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
 from pig_pipeline.training.yolo import (
+    calibrate_probs,
+    collect_val_probs,
     evaluate_on_split,
     load_yolo_model,
-    predict_test_logits,
+    predict_test_probs,
     train_classifier,
 )
 
@@ -45,7 +47,7 @@ def main() -> None:
     n_folds = int(cfg["split"]["n_folds"])
 
     test_df = pd.read_csv(run_root / "prepared" / "test_metadata.csv")
-    test_logits_all: list[np.ndarray] = []
+    test_probs_all: list[np.ndarray] = []
     fold_scores: list[dict[str, float]] = []
 
     aggregate_tracker = RunTracker(cfg, run_name=f"{cfg['output']['run_name']}-cv", group=cfg["output"]["run_name"])
@@ -83,12 +85,14 @@ def main() -> None:
         )
         fold_scores.append({"fold": fold_idx, "top1": metrics["top1"], "macro_f1": metrics["macro_f1"]})
 
-        test_logits = predict_test_logits(best_model, test_df)
-        test_logits_all.append(test_logits)
+        val_probs, y_val_true = collect_val_probs(best_model, fold_val_df)
+        test_probs = predict_test_probs(best_model, test_df)
+        calibrated_test_probs = calibrate_probs(val_probs, y_val_true, test_probs)
+        test_probs_all.append(calibrated_test_probs)
         fold_tracker.finish()
 
-    avg_logits = np.mean(np.stack(test_logits_all, axis=0), axis=0)
-    pred_classes = np.argmax(avg_logits, axis=1).astype(int)
+    avg_probs = np.mean(np.stack(test_probs_all, axis=0), axis=0)
+    pred_classes = np.argmax(avg_probs, axis=1).astype(int)
 
     submission = pd.DataFrame({"row_id": test_df["row_id"], "class_id": pred_classes})
     submission_path = cv_root / "submission_cv_ensemble.csv"

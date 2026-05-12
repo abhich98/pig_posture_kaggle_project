@@ -44,8 +44,8 @@ def train_classifier(
 def _predict_single(model: YOLO, image_path: str | Path) -> tuple[int, np.ndarray]:
     out = model.predict(source=str(image_path), verbose=False)
     top1 = int(out[0].probs.top1)
-    logits = out[0].probs.data.detach().cpu().numpy()
-    return top1, logits
+    probs = out[0].probs.data.detach().cpu().numpy()
+    return top1, probs
 
 
 def evaluate_on_split(model: YOLO, val_df: pd.DataFrame) -> dict[str, Any]:
@@ -75,9 +75,51 @@ def predict_test_top1(model: YOLO, test_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["row_id", "class_id"])
 
 
-def predict_test_logits(model: YOLO, test_df: pd.DataFrame) -> np.ndarray:
-    logits_list: list[np.ndarray] = []
-    for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="Predict logits"):
-        _, logits = _predict_single(model, row["crop_path"])
-        logits_list.append(logits)
-    return np.stack(logits_list, axis=0)
+def predict_test_probs(model: YOLO, test_df: pd.DataFrame) -> np.ndarray:
+    """Return softmax probabilities for every test sample, shape (n_samples, n_classes)."""
+    probs_list: list[np.ndarray] = []
+    for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="Predict probs"):
+        _, probs = _predict_single(model, row["crop_path"])
+        probs_list.append(probs)
+    return np.stack(probs_list, axis=0)
+
+
+def collect_val_probs(model: YOLO, val_df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Collect softmax probabilities and true labels on the validation split.
+
+    Returns
+    -------
+    probs : np.ndarray, shape (n_samples, n_classes)
+    y_true : np.ndarray, shape (n_samples,)
+    """
+    probs_list: list[np.ndarray] = []
+    y_true: list[int] = []
+    for _, row in tqdm(val_df.iterrows(), total=len(val_df), desc="Collect val probs"):
+        _, probs = _predict_single(model, row["crop_path"])
+        probs_list.append(probs)
+        y_true.append(int(row["class_id"]))
+    return np.stack(probs_list, axis=0), np.array(y_true)
+
+
+def calibrate_probs(
+    val_probs: np.ndarray,
+    y_true: np.ndarray,
+    test_probs: np.ndarray,
+) -> np.ndarray:
+    """Fit per-fold temperature scaling on validation data and return calibrated test probs.
+
+    Parameters
+    ----------
+    val_probs : np.ndarray, shape (n_val, n_classes) — softmax probs on validation set.
+    y_true    : np.ndarray, shape (n_val,)            — integer ground-truth labels.
+    test_probs: np.ndarray, shape (n_test, n_classes) — softmax probs on test set.
+
+    Returns
+    -------
+    np.ndarray, shape (n_test, n_classes) — calibrated probabilities.
+    """
+    from netcal.scaling import TemperatureScaling
+
+    calibrator = TemperatureScaling()
+    calibrator.fit(val_probs, y_true, tensorboard=False)
+    return calibrator.transform(test_probs, mean_estimate=True)
