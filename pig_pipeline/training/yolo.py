@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 from pathlib import Path
 from typing import Any
 import logging
@@ -9,6 +10,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from ultralytics import YOLO
+from ultralytics.models.yolo.classify.train import ClassificationTrainer
+from ultralytics.models.yolo.classify.val import ClassificationValidator
 
 from pig_pipeline.training.metrics import macro_f1, per_class_report
 
@@ -19,6 +22,44 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("yolo_training")
+
+
+class F1ClassificationValidator(ClassificationValidator):
+    """Ultralytics classification validator that tracks macro F1 and uses it as fitness."""
+
+    def get_desc(self) -> str:
+        return ("%22s" + "%11s" * 3) % ("classes", "top1_acc", "top5_acc", "macro_f1")
+
+    def get_stats(self) -> dict[str, float]:
+        stats = super().get_stats()
+
+        targets = np.concatenate([t.numpy().reshape(-1) for t in self.targets]).astype(int)
+        preds_topk = np.concatenate([p.numpy() for p in self.pred], axis=0)
+        preds_top1 = preds_topk[:, 0].astype(int)
+
+        macro_f1_value = macro_f1(targets.tolist(), preds_top1.tolist())
+        stats["metrics/macro_f1"] = macro_f1_value
+        stats["fitness"] = macro_f1_value
+        return stats
+
+    def print_results(self) -> None:
+        pf = "%22s" + "%11.3g" * 3
+        LOGGER = logging.getLogger("yolo_training")
+        results = self.get_stats()
+        LOGGER.info(pf % ("all", results.get("metrics/top1_acc", 0.0), results.get("metrics/top5_acc", 0.0), results.get("metrics/macro_f1", 0.0)))
+
+
+class F1ClassificationTrainer(ClassificationTrainer):
+    """Ultralytics classification trainer that selects best model by macro F1."""
+
+    def get_validator(self):
+        self.loss_names = ["loss"]
+        return F1ClassificationValidator(
+            self.test_loader,
+            self.save_dir,
+            args=copy(self.args),
+            _callbacks=self.callbacks,
+        )
 
 
 def load_yolo_model(weights: str) -> YOLO:
@@ -36,7 +77,14 @@ def train_classifier(
     dataset_dir: str | Path,
     train_args: dict[str, Any],
 ) -> Path:
-    results = model.train(data=str(dataset_dir), **train_args)
+    resolved_train_args = dict(train_args)
+    use_f1_selection = bool(resolved_train_args.pop("use_f1_selection", False))
+
+    if use_f1_selection:
+        results = model.train(trainer=F1ClassificationTrainer, data=str(dataset_dir), **resolved_train_args)
+    else:
+        results = model.train(data=str(dataset_dir), **resolved_train_args)
+
     _ = results
     return Path(model.trainer.best)
 
