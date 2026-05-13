@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from copy import copy
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ import logging
 import cv2
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+import torch
 from ultralytics import YOLO
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
 from ultralytics.models.yolo.classify.val import ClassificationValidator
@@ -22,6 +23,38 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("yolo_training")
+
+
+def flush_inference_memory_2() -> None:
+    """Release Python and CUDA cached memory between large inference phases."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+
+def flush_inference_memory() -> None:
+    """Release Python and CUDA cached memory when multiple GPUs are in use."""
+    gc.collect()
+    if not torch.cuda.is_available():
+        return
+
+    device_count = torch.cuda.device_count()
+    if device_count <= 1:
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+        return
+
+    current_device = torch.cuda.current_device()
+    try:
+        for idx in range(device_count):
+            torch.cuda.set_device(idx)
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    finally:
+        torch.cuda.set_device(current_device)
 
 
 class F1ClassificationValidator(ClassificationValidator):
@@ -43,10 +76,14 @@ class F1ClassificationValidator(ClassificationValidator):
         return stats
 
     def print_results(self) -> None:
-        pf = "%22s" + "%11.3g" * 3
-        LOGGER = logging.getLogger("yolo_training")
+        """Print results with macro_f1 added to standard metrics."""
+        # Let parent print the standard top1/top5 accuracy
+        super().print_results()
+        # Then log our custom macro_f1 metric
         results = self.get_stats()
-        LOGGER.info(pf % ("all", results.get("metrics/top1_acc", 0.0), results.get("metrics/top5_acc", 0.0), results.get("metrics/macro_f1", 0.0)))
+        f1 = results.get("metrics/macro_f1", 0.0)
+        LOGGER = logging.getLogger("yolo_training")
+        LOGGER.info(f"macro_f1: {f1:.3g}")
 
 
 class F1ClassificationTrainer(ClassificationTrainer):
@@ -96,16 +133,57 @@ def _predict_single(model: YOLO, image_path: str | Path) -> tuple[int, np.ndarra
     return top1, probs
 
 
-def evaluate_on_split(model: YOLO, val_df: pd.DataFrame) -> dict[str, Any]:
-    y_true: list[int] = []
-    y_pred: list[int] = []
+def _predict_batch(
+    model: YOLO,
+    image_paths: list[str | Path],
+    chunk: int = 1000,
+    imgsz: int = 320,
+    batch: int = 64,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run batched GPU inference over a list of image paths.
 
-    for _, row in tqdm(val_df.iterrows(), total=len(val_df), desc="Validate"):
-        pred, _ = _predict_single(model, row["crop_path"])
-        y_true.append(int(row["class_id"]))
-        y_pred.append(pred)
+    Returns
+    -------
+    top1  : np.ndarray, shape (n,)           — top-1 class index per image.
+    probs : np.ndarray, shape (n, n_classes) — softmax probabilities per image.
+    """
+    # paths = [str(p) for p in image_paths]
+    # top1_list: list[int] = []
+    # probs_list: list[np.ndarray] = []
+    # for r in model.predict(source=paths, verbose=False, batch=batch, stream=True):
+    #     top1_list.append(int(r.probs.top1))
+    #     probs_list.append(r.probs.data.detach().cpu().numpy())
+    # return np.array(top1_list), np.stack(probs_list, axis=0)
+    paths = [str(p) for p in image_paths]
+    top1_list = []
+    probs_list = []
+    
+    # 1. Process in smaller "chunks" to prevent massive preprocessing allocation
+    for i in range(0, len(paths), chunk):
+        chunk_paths = paths[i : i + chunk]
+        
+        # Use torch.no_grad() to ensure no gradient history is saved
+        with torch.no_grad():
+            for r in model.predict(source=chunk_paths, verbose=False, imgsz=imgsz, batch=batch, stream=True):
+                top1_list.append(int(r.probs.top1))
+                probs_list.append(r.probs.data.detach().cpu().numpy())
+        
+        # 2. Periodic Memory Clearing
+        flush_inference_memory()
+        gc.collect()
 
-    top1 = float(np.mean(np.array(y_true) == np.array(y_pred)))
+    return np.array(top1_list), np.stack(probs_list, axis=0)
+
+
+def evaluate_on_split(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any]) -> dict[str, Any]:
+    paths = val_df["crop_path"].tolist()
+    y_true = val_df["class_id"].astype(int).tolist()
+
+    logger.info(f"Evaluating {len(paths)} validation samples (batch={inf_args.get('batch', 64)})...")
+    y_pred_arr, _ = _predict_batch(model, paths, **inf_args)
+    y_pred = y_pred_arr.tolist()
+
+    top1 = float(np.mean(np.array(y_true) == y_pred_arr))
     macro = macro_f1(y_true, y_pred)
     report = per_class_report(y_true, y_pred)
     return {
@@ -115,24 +193,22 @@ def evaluate_on_split(model: YOLO, val_df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def predict_test_top1(model: YOLO, test_df: pd.DataFrame) -> pd.DataFrame:
-    rows: list[tuple[str, int]] = []
-    for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="Predict test"):
-        pred, _ = _predict_single(model, row["crop_path"])
-        rows.append((str(row["row_id"]), int(pred)))
-    return pd.DataFrame(rows, columns=["row_id", "class_id"])
+def predict_test_top1(model: YOLO, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> pd.DataFrame:
+    paths = test_df["crop_path"].tolist()
+    logger.info(f"Predicting top-1 for {len(paths)} test samples (batch={inf_args.get('batch', 64)})...")
+    top1_arr, _ = _predict_batch(model, paths, **inf_args)
+    return pd.DataFrame({"row_id": test_df["row_id"].astype(str).tolist(), "class_id": top1_arr.tolist()})
 
 
-def predict_test_probs(model: YOLO, test_df: pd.DataFrame) -> np.ndarray:
+def predict_test_probs(model: YOLO, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> np.ndarray:
     """Return softmax probabilities for every test sample, shape (n_samples, n_classes)."""
-    probs_list: list[np.ndarray] = []
-    for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="Predict probs"):
-        _, probs = _predict_single(model, row["crop_path"])
-        probs_list.append(probs)
-    return np.stack(probs_list, axis=0)
+    paths = test_df["crop_path"].tolist()
+    logger.info(f"Predicting probs for {len(paths)} test samples (batch={inf_args.get('batch', 64)})...")
+    _, probs = _predict_batch(model, paths, **inf_args)
+    return probs
 
 
-def collect_val_probs(model: YOLO, val_df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def collect_val_probs(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     """Collect softmax probabilities and true labels on the validation split.
 
     Returns
@@ -140,13 +216,11 @@ def collect_val_probs(model: YOLO, val_df: pd.DataFrame) -> tuple[np.ndarray, np
     probs : np.ndarray, shape (n_samples, n_classes)
     y_true : np.ndarray, shape (n_samples,)
     """
-    probs_list: list[np.ndarray] = []
-    y_true: list[int] = []
-    for _, row in tqdm(val_df.iterrows(), total=len(val_df), desc="Collect val probs"):
-        _, probs = _predict_single(model, row["crop_path"])
-        probs_list.append(probs)
-        y_true.append(int(row["class_id"]))
-    return np.stack(probs_list, axis=0), np.array(y_true)
+    paths = val_df["crop_path"].tolist()
+    y_true = val_df["class_id"].astype(int).to_numpy()
+    logger.info(f"Collecting val probs for {len(paths)} samples (batch={inf_args.get('batch', 64)})...")
+    _, probs = _predict_batch(model, paths, **inf_args)
+    return probs, y_true
 
 
 def calibrate_probs(
@@ -168,6 +242,13 @@ def calibrate_probs(
     """
     from netcal.scaling import TemperatureScaling
 
+    # netcal converts numpy arrays to torch tensors internally. Ensure inputs are
+    # writable contiguous buffers to avoid undefined behavior warnings.
+    val_probs_safe = np.array(val_probs, dtype=np.float32, copy=True, order="C")
+    y_true_safe = np.array(y_true, dtype=np.int64, copy=True, order="C")
+    test_probs_safe = np.array(test_probs, dtype=np.float32, copy=True, order="C")
+
     calibrator = TemperatureScaling()
-    calibrator.fit(val_probs, y_true, tensorboard=False)
-    return calibrator.transform(test_probs, mean_estimate=True)
+    calibrator.fit(val_probs_safe, y_true_safe, tensorboard=False)
+    calibrated = calibrator.transform(test_probs_safe, mean_estimate=True)
+    return np.array(calibrated, dtype=np.float32, copy=False)

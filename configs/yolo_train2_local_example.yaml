@@ -1,11 +1,11 @@
 data:
-  train_csv: "<ABS_PATH_TO_DATASET>/train2.csv"
-  test_csv: "<ABS_PATH_TO_DATASET>/test.csv"
-  train_image_dir: "<ABS_PATH_TO_DATASET>/train2_images"
-  test_image_dir: "<ABS_PATH_TO_DATASET>/test_images"
-  img_size: 224
+  train_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train2.csv"
+  test_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/test.csv"
+  train_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train2_images"
+  test_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/test_images"
+  img_size: 320
   pad: 10
-  prep_n_jobs: 1
+  prep_n_jobs: 6
 
 split:
   seed: 42
@@ -16,22 +16,34 @@ model:
   weights: "yolo11n-cls.pt"
 
 train:
-  epochs: 40
+  epochs: 35
   imgsz: 320
-  batch: 32
-  device: 0
-  workers: 2
+  batch: 128
+  device: [0, 1]
+  workers: 6
+  cache: true
+  val: true
+  deterministic: false
+  amp: true
+  plots: true
   seed: 42
   fliplr: 0.0
   flipud: 0.0
+  use_f1_selection: true
 
 wandb:
-  enabled: true
+  enabled: false
   project: "pig-posture-kaggle-SSL"
   entity: null
   mode: "online"
-  tags: ["yolo", "local", "train2"]
+  tags: ["yolo", "local", "train2", "f1_selection"]
 
 output:
-  root: "outputs"
+  root: "data/generated"
   run_name: "train2_local_run"
+  submission_key: "with_f1_selection"
+
+inference:
+  batch: 128
+  chunk: 1000
+  imgsz: 320

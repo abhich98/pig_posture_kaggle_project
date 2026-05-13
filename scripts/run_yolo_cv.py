@@ -49,12 +49,9 @@ def main() -> None:
     test_probs_all: list[np.ndarray] = []
     fold_scores: list[dict[str, float]] = []
 
-    aggregate_tracker = RunTracker(cfg, run_name=f"{cfg['output']['run_name']}-cv", group=cfg["output"]["run_name"])
-
     for fold_idx in range(n_folds):
-        fold_train_df = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "train.csv")
+        _ = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "train.csv")
         fold_val_df = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "val.csv")
-        _ = fold_train_df
 
         fold_tracker = RunTracker(
             cfg,
@@ -81,7 +78,7 @@ def main() -> None:
                 "fold/macro_f1": metrics["macro_f1"],
                 "fold/index": fold_idx,
             }
-        )
+        )        
         fold_scores.append({"fold": fold_idx, "top1": metrics["top1"], "macro_f1": metrics["macro_f1"], "model_path": str(best_pt)})
 
         val_probs, y_val_true = collect_val_probs(best_model, fold_val_df, inf_args=dict(cfg["inference"]))
@@ -105,13 +102,6 @@ def main() -> None:
     fold_metrics_path = cv_root / f"fold_metrics_{cfg['output']['submission_key']}.json"
     with fold_metrics_path.open("w", encoding="utf-8") as f:
         json.dump(fold_scores, f, indent=2)
-
-    mean_top1 = float(np.mean([f["top1"] for f in fold_scores]))
-    mean_macro = float(np.mean([f["macro_f1"] for f in fold_scores]))
-    aggregate_tracker.log({"cv/mean_top1": mean_top1, "cv/mean_macro_f1": mean_macro})
-    aggregate_tracker.log_file("cv_fold_metrics", fold_metrics_path)
-    aggregate_tracker.log_file("cv_submission", submission_path)
-    aggregate_tracker.finish()
 
     logger.info(f"CV submission: {submission_path}")
     logger.info(f"Fold metrics: {fold_metrics_path}")

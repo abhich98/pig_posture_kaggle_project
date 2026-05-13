@@ -27,7 +27,7 @@ class RunTracker:
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         if self.run is not None:
-            wandb.log(metrics, step=step)
+            self.run.log(metrics, step=step)
 
     def log_file(self, key: str, path: str | Path) -> None:
         if self.run is None:
