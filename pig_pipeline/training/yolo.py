@@ -14,7 +14,8 @@ from ultralytics import YOLO
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
 from ultralytics.models.yolo.classify.val import ClassificationValidator
 
-from pig_pipeline.training.metrics import macro_f1, per_class_report
+from pig_pipeline.training.metrics import macro_f1
+from pig_pipeline.training.utills import calibrate_probs, compute_classification_metrics
 
 
 logging.basicConfig(
@@ -183,14 +184,7 @@ def evaluate_on_split(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any
     y_pred_arr, _ = _predict_batch(model, paths, **inf_args)
     y_pred = y_pred_arr.tolist()
 
-    top1 = float(np.mean(np.array(y_true) == y_pred_arr))
-    macro = macro_f1(y_true, y_pred)
-    report = per_class_report(y_true, y_pred)
-    return {
-        "top1": top1,
-        "macro_f1": macro,
-        "report": report,
-    }
+    return compute_classification_metrics(y_true, y_pred)
 
 
 def predict_test_top1(model: YOLO, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> pd.DataFrame:
@@ -221,34 +215,3 @@ def collect_val_probs(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any
     logger.info(f"Collecting val probs for {len(paths)} samples (batch={inf_args.get('batch', 64)})...")
     _, probs = _predict_batch(model, paths, **inf_args)
     return probs, y_true
-
-
-def calibrate_probs(
-    val_probs: np.ndarray,
-    y_true: np.ndarray,
-    test_probs: np.ndarray,
-) -> np.ndarray:
-    """Fit per-fold temperature scaling on validation data and return calibrated test probs.
-
-    Parameters
-    ----------
-    val_probs : np.ndarray, shape (n_val, n_classes) — softmax probs on validation set.
-    y_true    : np.ndarray, shape (n_val,)            — integer ground-truth labels.
-    test_probs: np.ndarray, shape (n_test, n_classes) — softmax probs on test set.
-
-    Returns
-    -------
-    np.ndarray, shape (n_test, n_classes) — calibrated probabilities.
-    """
-    from netcal.scaling import TemperatureScaling
-
-    # netcal converts numpy arrays to torch tensors internally. Ensure inputs are
-    # writable contiguous buffers to avoid undefined behavior warnings.
-    val_probs_safe = np.array(val_probs, dtype=np.float32, copy=True, order="C")
-    y_true_safe = np.array(y_true, dtype=np.int64, copy=True, order="C")
-    test_probs_safe = np.array(test_probs, dtype=np.float32, copy=True, order="C")
-
-    calibrator = TemperatureScaling()
-    calibrator.fit(val_probs_safe, y_true_safe, tensorboard=False)
-    calibrated = calibrator.transform(test_probs_safe, mean_estimate=True)
-    return np.array(calibrated, dtype=np.float32, copy=False)

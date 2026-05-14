@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import logging
 import sys
@@ -9,13 +8,10 @@ import sys
 import numpy as np
 import pandas as pd
 
-repo_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(repo_root))
-
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
+from pig_pipeline.training.utills import calibrate_probs, save_metrics_json
 from pig_pipeline.training.yolo import (
-    calibrate_probs,
     collect_val_probs,
     evaluate_on_split,
     load_yolo_model,
@@ -100,8 +96,7 @@ def main() -> None:
     submission.to_csv(submission_path, index=False)
 
     fold_metrics_path = cv_root / f"fold_metrics_{cfg['output']['submission_key']}.json"
-    with fold_metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(fold_scores, f, indent=2)
+    save_metrics_json(fold_scores, fold_metrics_path)
 
     logger.info(f"CV submission: {submission_path}")
     logger.info(f"Fold metrics: {fold_metrics_path}")

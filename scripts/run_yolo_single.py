@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import logging
 import sys
@@ -9,11 +8,9 @@ from pathlib import Path
 
 import pandas as pd
 
-repo_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(repo_root))
-
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
+from pig_pipeline.training.utills import save_metrics_json
 from pig_pipeline.training.yolo import evaluate_on_split, load_yolo_model, predict_test_top1, train_classifier
 
 
@@ -61,8 +58,7 @@ def main() -> None:
     submission.to_csv(submission_path, index=False)
 
     metrics_path = single_root / f"metrics_single_{cfg['output']['submission_key']}.json"
-    with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
+    save_metrics_json(metrics, metrics_path)
 
     tracker.log_file("single_metrics", metrics_path)
     tracker.log_file("single_submission", submission_path)

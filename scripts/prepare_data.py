@@ -8,9 +8,6 @@ from pathlib import Path
 
 import pandas as pd
 
-repo_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(repo_root))
-
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.data.prepare import build_crop_metadata, materialize_yolo_classification_dir
 from pig_pipeline.data.splits import build_cv_splits, build_single_split
