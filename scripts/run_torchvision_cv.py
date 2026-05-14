@@ -8,6 +8,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import torch
 
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
@@ -32,6 +33,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("torchvision_cv_training")
+
+# Enable Tensor Core optimization for float32 matmul operations
+torch.set_float32_matmul_precision('high')
 
 
 def parse_args() -> argparse.Namespace:

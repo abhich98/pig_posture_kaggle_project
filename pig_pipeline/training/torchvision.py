@@ -225,7 +225,12 @@ class LitImageClassifier(pl.LightningModule):
         _ = batch_idx
         x, y = batch
         logits = self(x)
-        loss = F.cross_entropy(logits, y, label_smoothing=self.label_smoothing)
+        loss = F.cross_entropy(
+            logits, 
+            y, 
+            weight=self.class_weights,
+            label_smoothing=self.label_smoothing
+        )
         preds = torch.argmax(logits, dim=1)
 
         self._val_preds.append(preds.detach().cpu())
@@ -357,7 +362,6 @@ def load_torchvision_model_from_checkpoint(
         weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
         label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         max_epochs=int(train_cfg.get("epochs", 30)),
-        class_weights=None,
     )
 
 

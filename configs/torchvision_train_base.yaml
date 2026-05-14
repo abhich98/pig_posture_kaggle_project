@@ -1,0 +1,93 @@
+data:
+  train_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train2.csv"
+  test_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/test.csv"
+  train_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train2_images"
+  test_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/test_images"
+  class_names_file: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/pig_posture_classes.txt"
+  img_size: 320
+  pad: 10
+  prep_n_jobs: 6
+
+split:
+  seed: 42
+  single_val_ratio: 0.2
+  n_folds: 5
+
+model:
+  name: "efficientnet_v2_s"
+  pretrained: true
+  dropout: 0.2
+
+train:
+  # Core optimization
+  epochs: 20
+  batch: 96
+  workers: 6
+  seed: 42
+  lr: 0.0003
+  weight_decay: 0.0001
+
+  # Regularization
+  label_smoothing: 0.05
+
+  # Numeric precision and reproducibility
+  precision: "16-mixed"
+  deterministic: false
+
+  # Class imbalance handling (YOLO-like behavior)
+  # Class weighting power for inverse-frequency loss weighting.
+  # 0.0 disables weighting, 1.0 applies full inverse-frequency weighting.
+  cls_pw: 0.5
+
+  # Training control
+  accumulate_grad_batches: 1
+  pin_memory: true
+  early_stopping_patience: 8
+  early_stopping_min_delta: 0.0005
+  log_every_n_steps: 20
+
+augment:
+  # Geometric crop policy (keeps random crop area/aspect under control)
+  scale_min: 0.65
+  scale_max: 1.0
+  ratio_min: 0.75
+  ratio_max: 1.33
+
+  # Photometric jitter
+  color_p: 0.8
+  brightness: 0.35
+  contrast: 0.35
+  saturation: 0.25
+  hue: 0.06
+
+  # Blur and perspective perturbation
+  blur_p: 0.2
+  perspective: 0.2
+  perspective_p: 0.25
+
+  # Random erasing regularization
+  erasing_p: 0.25
+  erase_scale_min: 0.02
+  erase_scale_max: 0.2
+  erase_ratio_min: 0.3
+  erase_ratio_max: 3.3
+
+  # Evaluation resize ratio before center crop
+  eval_resize_ratio: 1.14
+
+inference:
+  batch: 128
+  num_workers: 6
+  imgsz: 320
+
+wandb:
+  enabled: true
+  project: "pig-posture-kaggle-SSL"
+  entity: null
+  mode: "online"
+  tags: ["torchvision", "lightning", "train2", "cv"]
+
+output:
+  root: "data/generated"
+  run_name: "train2_local_run"
+  submission_key: "train2_torchvision_convnext"

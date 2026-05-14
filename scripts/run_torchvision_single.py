@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import torch
 
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
@@ -23,6 +24,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("torchvision_single_training")
+
+# Enable Tensor Core optimization for float32 matmul operations
+torch.set_float32_matmul_precision('high')
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,7 +54,11 @@ def main() -> None:
 
     tracker = RunTracker(cfg, run_name=f"{cfg['output']['run_name']}-torchvision-single")
 
-    train_out_dir = ensure_dir(single_root / "runs")
+    i = 0
+    while (single_root / f"runs-{i:02d}").exists():
+        i += 1
+    train_out_dir = ensure_dir(single_root / f"runs-{i:02d}")
+
     artifacts = train_torchvision_classifier(
         train_df=train_df,
         val_df=val_df,
