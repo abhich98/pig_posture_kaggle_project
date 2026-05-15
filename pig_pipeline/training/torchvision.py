@@ -182,10 +182,16 @@ class LitImageClassifier(pl.LightningModule):
         weight_decay: float,
         label_smoothing: float,
         max_epochs: int,
+        lr_strategy: str = "single",
+        lr_backbone_factor: float = 0.1,
+        lr_layer_decay: float = 0.3,
+        freeze_backbone_epochs: int = 0,
         class_weights: list[float] | None = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
+
+        self.model_name = str(model_name).lower().replace("-", "_")
 
         self.model = _build_backbone(
             model_name=model_name,
@@ -198,6 +204,21 @@ class LitImageClassifier(pl.LightningModule):
         self.weight_decay = float(weight_decay)
         self.label_smoothing = float(label_smoothing)
         self.max_epochs = int(max_epochs)
+        self.lr_strategy = str(lr_strategy).strip().lower().replace("-", "_")
+        self.lr_backbone_factor = float(lr_backbone_factor)
+        self.lr_layer_decay = float(lr_layer_decay)
+        self.freeze_backbone_epochs = int(freeze_backbone_epochs)
+
+        if self.lr_strategy not in {"single", "backbone_head", "layerwise"}:
+            raise ValueError(
+                "train.lr_strategy must be one of: single, backbone_head, layerwise"
+            )
+        if self.lr_backbone_factor <= 0.0:
+            raise ValueError("train.lr_backbone_factor must be > 0")
+        if not (0.0 < self.lr_layer_decay <= 1.0):
+            raise ValueError("train.lr_layer_decay must be in (0, 1]")
+        if self.freeze_backbone_epochs < 0:
+            raise ValueError("train.freeze_backbone_epochs must be >= 0")
 
         if class_weights is not None:
             weight_tensor = torch.tensor(class_weights, dtype=torch.float32)
@@ -207,6 +228,14 @@ class LitImageClassifier(pl.LightningModule):
 
         self._val_preds: list[torch.Tensor] = []
         self._val_targets: list[torch.Tensor] = []
+        self._backbone_frozen = False
+
+        if self.freeze_backbone_epochs > 0:
+            self._set_backbone_trainable(False)
+            logger.info(
+                "Backbone frozen for first %d epoch(s)",
+                self.freeze_backbone_epochs,
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
@@ -285,8 +314,225 @@ class LitImageClassifier(pl.LightningModule):
             sync_dist=False,
         )
 
+    def on_train_epoch_start(self) -> None:
+        should_freeze = self.current_epoch < self.freeze_backbone_epochs
+        if should_freeze and not self._backbone_frozen:
+            self._set_backbone_trainable(False)
+            logger.info("Backbone re-frozen at epoch %d", self.current_epoch)
+        elif not should_freeze and self._backbone_frozen:
+            self._set_backbone_trainable(True)
+            logger.info("Backbone unfrozen at epoch %d", self.current_epoch)
+
+    def _is_head_param_name(self, name: str) -> bool:
+        if self.model_name in {"convnext_tiny", "efficientnet_v2_s"}:
+            return name.startswith("model.classifier")
+        if self.model_name == "resnet50":
+            return name.startswith("model.fc")
+        return False
+
+    def _set_backbone_trainable(self, trainable: bool) -> None:
+        for name, param in self.named_parameters():
+            if not name.startswith("model."):
+                continue
+            if self._is_head_param_name(name):
+                continue
+            param.requires_grad = trainable
+        self._backbone_frozen = not trainable
+
+    @staticmethod
+    def _match_prefix(name: str, prefixes: tuple[str, ...]) -> bool:
+        return any(name.startswith(prefix) for prefix in prefixes)
+
+    def _build_param_groups(self) -> list[dict[str, Any]]:
+        named_params = list(self.named_parameters())
+
+        if self.lr_strategy == "single":
+            return [
+                {
+                    "name": "all",
+                    "params": [p for _, p in named_params],
+                    "lr": self.lr,
+                    "weight_decay": self.weight_decay,
+                }
+            ]
+
+        head_params = [
+            p for n, p in named_params if n.startswith("model.") and self._is_head_param_name(n)
+        ]
+        backbone_params = [
+            p for n, p in named_params if n.startswith("model.") and not self._is_head_param_name(n)
+        ]
+        non_model_params = [p for n, p in named_params if not n.startswith("model.")]
+
+        if self.lr_strategy == "backbone_head":
+            groups: list[dict[str, Any]] = []
+            if head_params:
+                groups.append(
+                    {
+                        "name": "head",
+                        "params": head_params,
+                        "lr": self.lr,
+                        "weight_decay": self.weight_decay,
+                    }
+                )
+            if backbone_params:
+                groups.append(
+                    {
+                        "name": "backbone",
+                        "params": backbone_params,
+                        "lr": self.lr * self.lr_backbone_factor,
+                        "weight_decay": self.weight_decay,
+                    }
+                )
+            if non_model_params:
+                groups.append(
+                    {
+                        "name": "misc",
+                        "params": non_model_params,
+                        "lr": self.lr,
+                        "weight_decay": self.weight_decay,
+                    }
+                )
+            return groups
+
+        # Layer-wise discriminative LR
+        if self.model_name in {"convnext_tiny", "efficientnet_v2_s"}:
+            early_prefixes = (
+                "model.features.0",
+                "model.features.1",
+                "model.features.2",
+                "model.features.3",
+            )
+            mid_prefixes = ("model.features.4", "model.features.5")
+            late_prefixes = ("model.features.6", "model.features.7")
+        elif self.model_name == "resnet50":
+            early_prefixes = (
+                "model.conv1",
+                "model.bn1",
+                "model.layer1",
+                "model.layer2",
+            )
+            mid_prefixes = ("model.layer3",)
+            late_prefixes = ("model.layer4",)
+        else:
+            # Safe fallback for unsupported future backbones.
+            return [
+                {
+                    "name": "head",
+                    "params": head_params,
+                    "lr": self.lr,
+                    "weight_decay": self.weight_decay,
+                },
+                {
+                    "name": "backbone",
+                    "params": backbone_params,
+                    "lr": self.lr * self.lr_backbone_factor,
+                    "weight_decay": self.weight_decay,
+                },
+            ]
+
+        early_params = [
+            p
+            for n, p in named_params
+            if n.startswith("model.")
+            and not self._is_head_param_name(n)
+            and self._match_prefix(n, early_prefixes)
+        ]
+        mid_params = [
+            p
+            for n, p in named_params
+            if n.startswith("model.")
+            and not self._is_head_param_name(n)
+            and self._match_prefix(n, mid_prefixes)
+        ]
+        late_params = [
+            p
+            for n, p in named_params
+            if n.startswith("model.")
+            and not self._is_head_param_name(n)
+            and self._match_prefix(n, late_prefixes)
+        ]
+
+        assigned_ids = {id(p) for p in early_params + mid_params + late_params + head_params}
+        other_backbone_params = [
+            p
+            for n, p in named_params
+            if n.startswith("model.") and not self._is_head_param_name(n) and id(p) not in assigned_ids
+        ]
+
+        d = self.lr_layer_decay
+        groups = []
+        if head_params:
+            groups.append(
+                {
+                    "name": "head",
+                    "params": head_params,
+                    "lr": self.lr,
+                    "weight_decay": self.weight_decay,
+                }
+            )
+        if late_params:
+            groups.append(
+                {
+                    "name": "backbone_late",
+                    "params": late_params,
+                    "lr": self.lr * d,
+                    "weight_decay": self.weight_decay,
+                }
+            )
+        if mid_params:
+            groups.append(
+                {
+                    "name": "backbone_mid",
+                    "params": mid_params,
+                    "lr": self.lr * (d**2),
+                    "weight_decay": self.weight_decay,
+                }
+            )
+        if early_params:
+            groups.append(
+                {
+                    "name": "backbone_early",
+                    "params": early_params,
+                    "lr": self.lr * (d**3),
+                    "weight_decay": self.weight_decay,
+                }
+            )
+        if other_backbone_params:
+            groups.append(
+                {
+                    "name": "backbone_other",
+                    "params": other_backbone_params,
+                    "lr": self.lr * (d**2),
+                    "weight_decay": self.weight_decay,
+                }
+            )
+        if non_model_params:
+            groups.append(
+                {
+                    "name": "misc",
+                    "params": non_model_params,
+                    "lr": self.lr,
+                    "weight_decay": self.weight_decay,
+                }
+            )
+        return groups
+
     def configure_optimizers(self):
-        optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        param_groups = self._build_param_groups()
+        logger.info(
+            "Optimizer LR strategy=%s, groups=%s",
+            self.lr_strategy,
+            [
+                {
+                    "name": g.get("name", "group"),
+                    "lr": g["lr"],
+                    "n_params": sum(p.numel() for p in g["params"]),
+                }
+                for g in param_groups
+            ],
+        )
+        optimizer = AdamW(param_groups)
         scheduler = CosineAnnealingLR(
             optimizer, T_max=max(1, self.max_epochs), eta_min=self.lr * 0.01
         )
@@ -413,6 +659,10 @@ def load_torchvision_model_from_checkpoint(
         weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
         label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         max_epochs=int(train_cfg.get("epochs", 30)),
+        lr_strategy=str(train_cfg.get("lr_strategy", "single")),
+        lr_backbone_factor=float(train_cfg.get("lr_backbone_factor", 0.1)),
+        lr_layer_decay=float(train_cfg.get("lr_layer_decay", 0.3)),
+        freeze_backbone_epochs=int(train_cfg.get("freeze_backbone_epochs", 0)),
     )
 
 
@@ -479,6 +729,10 @@ def train_torchvision_classifier(
         weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
         label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         max_epochs=int(train_cfg.get("epochs", 30)),
+        lr_strategy=str(train_cfg.get("lr_strategy", "single")),
+        lr_backbone_factor=float(train_cfg.get("lr_backbone_factor", 0.1)),
+        lr_layer_decay=float(train_cfg.get("lr_layer_decay", 0.3)),
+        freeze_backbone_epochs=int(train_cfg.get("freeze_backbone_epochs", 0)),
         class_weights=class_weights,
     )
 
