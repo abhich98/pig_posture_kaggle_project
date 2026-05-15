@@ -9,10 +9,12 @@ from pathlib import Path
 import pandas as pd
 
 from pig_pipeline.config import ensure_dir, load_config
-from pig_pipeline.data.prepare import build_crop_metadata, materialize_yolo_classification_dir
+from pig_pipeline.data.prepare import (
+    build_crop_metadata,
+    materialize_yolo_classification_dir,
+)
 from pig_pipeline.data.splits import build_cv_splits, build_single_split
 from pig_pipeline.tracking import RunTracker
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,7 +25,9 @@ logger = logging.getLogger("prepare_data")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Prepare crop dataset and split manifests.")
+    parser = argparse.ArgumentParser(
+        description="Prepare crop dataset and split manifests."
+    )
     parser.add_argument("--config", required=True, help="Path to YAML config")
     return parser.parse_args()
 
@@ -37,7 +41,9 @@ def main() -> None:
     out_cfg = cfg["output"]
 
     run_root = ensure_dir(Path(out_cfg["root"]).resolve() / out_cfg["run_name"])
-    tracker = RunTracker(cfg, run_name=f"{out_cfg['run_name']}-prepare", group=out_cfg["run_name"])
+    tracker = RunTracker(
+        cfg, run_name=f"{out_cfg['run_name']}-prepare", group=out_cfg["run_name"]
+    )
     prep_root = ensure_dir(run_root / "prepared")
     crops_train = ensure_dir(prep_root / "crops" / "train")
     crops_test = ensure_dir(prep_root / "crops" / "test")
@@ -78,8 +84,16 @@ def main() -> None:
     )
 
     yolo_single_root = ensure_dir(run_root / "yolo_data" / "single")
-    materialize_yolo_classification_dir(single_train_df, yolo_single_root / "train", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
-    materialize_yolo_classification_dir(single_val_df, yolo_single_root / "val", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
+    materialize_yolo_classification_dir(
+        single_train_df,
+        yolo_single_root / "train",
+        n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
+    )
+    materialize_yolo_classification_dir(
+        single_val_df,
+        yolo_single_root / "val",
+        n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
+    )
 
     folds = build_cv_splits(
         train_df,
@@ -90,13 +104,25 @@ def main() -> None:
     yolo_cv_root = ensure_dir(run_root / "yolo_data" / "cv")
     for fold_train_df, fold_val_df, fold_idx in folds:
         fold_root = ensure_dir(yolo_cv_root / f"fold_{fold_idx}")
-        materialize_yolo_classification_dir(fold_train_df, fold_root / "train", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
-        materialize_yolo_classification_dir(fold_val_df, fold_root / "val", n_jobs=int(data_cfg.get("prep_n_jobs", 1)))
+        materialize_yolo_classification_dir(
+            fold_train_df,
+            fold_root / "train",
+            n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
+        )
+        materialize_yolo_classification_dir(
+            fold_val_df, fold_root / "val", n_jobs=int(data_cfg.get("prep_n_jobs", 1))
+        )
 
     summary = pd.DataFrame(
         {
             "split": ["train_rows", "test_rows", "single_train", "single_val", "folds"],
-            "count": [len(train_df), len(test_df), len(single_train_df), len(single_val_df), len(folds)],
+            "count": [
+                len(train_df),
+                len(test_df),
+                len(single_train_df),
+                len(single_val_df),
+                len(folds),
+            ],
         }
     )
     summary_path = run_root / "prepare_summary.csv"

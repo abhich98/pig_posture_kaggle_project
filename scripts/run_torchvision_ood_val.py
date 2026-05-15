@@ -8,14 +8,16 @@ import pandas as pd
 import torch
 
 from pig_pipeline.config import load_config
-from pig_pipeline.training.torchvision import _predict_batch, load_torchvision_model_from_checkpoint
+from pig_pipeline.training.torchvision import (
+    _predict_batch,
+    load_torchvision_model_from_checkpoint,
+)
 from pig_pipeline.training.utills import (
     compute_classification_metrics,
     load_class_names,
     save_classification_plots,
     save_metrics_json,
 )
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,7 +101,9 @@ def main() -> None:
             "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/pig_posture_classes.txt",
         )
     )
-    class_names = load_class_names(class_file, fallback_n_classes=int(ood_df["class_id"].max()) + 1)
+    class_names = load_class_names(
+        class_file, fallback_n_classes=int(ood_df["class_id"].max()) + 1
+    )
 
     ckpt_path = _resolve_checkpoint(run_dir)
     logger.info("Using checkpoint: %s", ckpt_path)
@@ -122,7 +126,9 @@ def main() -> None:
 
     paths = ood_df["crop_path"].tolist()
     y_true = ood_df["class_id"].astype(int).tolist()
-    logger.info("Running OOD inference on %d samples (inf_args=%s)...", len(paths), inf_args)
+    logger.info(
+        "Running OOD inference on %d samples (inf_args=%s)...", len(paths), inf_args
+    )
     y_pred_arr, _ = _predict_batch(model, paths, inf_args=inf_args)
     y_pred = y_pred_arr.tolist()
 

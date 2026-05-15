@@ -28,7 +28,9 @@ logger = logging.getLogger("yolo_cv_training")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run YOLO 5-fold CV + logits ensemble.")
+    parser = argparse.ArgumentParser(
+        description="Run YOLO 5-fold CV + logits ensemble."
+    )
     parser.add_argument("--config", required=True, help="Path to YAML config")
     return parser.parse_args()
 
@@ -47,7 +49,9 @@ def main() -> None:
 
     for fold_idx in range(n_folds):
         _ = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "train.csv")
-        fold_val_df = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "val.csv")
+        fold_val_df = pd.read_csv(
+            run_root / "splits" / "cv" / f"fold_{fold_idx}" / "val.csv"
+        )
 
         fold_tracker = RunTracker(
             cfg,
@@ -67,18 +71,31 @@ def main() -> None:
         )
         best_model = load_yolo_model(str(best_pt))
 
-        metrics = evaluate_on_split(best_model, fold_val_df, inf_args=dict(cfg["inference"]))
+        metrics = evaluate_on_split(
+            best_model, fold_val_df, inf_args=dict(cfg["inference"])
+        )
         fold_tracker.log(
             {
                 "fold/top1": metrics["top1"],
                 "fold/macro_f1": metrics["macro_f1"],
                 "fold/index": fold_idx,
             }
-        )        
-        fold_scores.append({"fold": fold_idx, "top1": metrics["top1"], "macro_f1": metrics["macro_f1"], "model_path": str(best_pt)})
+        )
+        fold_scores.append(
+            {
+                "fold": fold_idx,
+                "top1": metrics["top1"],
+                "macro_f1": metrics["macro_f1"],
+                "model_path": str(best_pt),
+            }
+        )
 
-        val_probs, y_val_true = collect_val_probs(best_model, fold_val_df, inf_args=dict(cfg["inference"]))
-        test_probs = predict_test_probs(best_model, test_df, inf_args=dict(cfg["inference"]))
+        val_probs, y_val_true = collect_val_probs(
+            best_model, fold_val_df, inf_args=dict(cfg["inference"])
+        )
+        test_probs = predict_test_probs(
+            best_model, test_df, inf_args=dict(cfg["inference"])
+        )
         calibrated_test_probs = calibrate_probs(val_probs, y_val_true, test_probs)
         test_probs_all.append(calibrated_test_probs)
 
@@ -92,7 +109,9 @@ def main() -> None:
     pred_classes = np.argmax(avg_probs, axis=1).astype(int)
 
     submission = pd.DataFrame({"row_id": test_df["row_id"], "class_id": pred_classes})
-    submission_path = cv_root / f"submission_cv_ensemble_{cfg['output']['submission_key']}.csv"
+    submission_path = (
+        cv_root / f"submission_cv_ensemble_{cfg['output']['submission_key']}.csv"
+    )
     submission.to_csv(submission_path, index=False)
 
     fold_metrics_path = cv_root / f"fold_metrics_{cfg['output']['submission_key']}.json"

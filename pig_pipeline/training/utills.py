@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 from typing import Any
@@ -8,9 +9,46 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import seaborn as sns
+import torch
 from sklearn.metrics import confusion_matrix
 
 from pig_pipeline.training.metrics import macro_f1, per_class_report
+
+
+def flush_torch_memory_2() -> None:
+    """Release Python and CUDA cached memory between large inference phases."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+
+
+def flush_torch_memory() -> None:
+    """Release Python and CUDA cached memory when multiple GPUs are in use."""
+    gc.collect()
+    if not torch.cuda.is_available():
+        return
+
+    device_count = torch.cuda.device_count()
+    if device_count <= 1:
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+        return
+
+    current_device = torch.cuda.current_device()
+    try:
+        for idx in range(device_count):
+            torch.cuda.set_device(idx)
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    finally:
+        torch.cuda.set_device(current_device)
+
+
+# METRICS AND PLOTTING UTILS
 
 
 def compute_classification_metrics(
@@ -50,10 +88,14 @@ def calibrate_probs(
     return np.array(calibrated, dtype=np.float32, copy=False)
 
 
-def load_class_names(class_file: str | Path, fallback_n_classes: int | None = None) -> list[str]:
+def load_class_names(
+    class_file: str | Path, fallback_n_classes: int | None = None
+) -> list[str]:
     class_path = Path(class_file)
     if class_path.exists():
-        lines = [line.strip() for line in class_path.read_text(encoding="utf-8").splitlines()]
+        lines = [
+            line.strip() for line in class_path.read_text(encoding="utf-8").splitlines()
+        ]
         names = [line for line in lines if line]
         if names:
             return names
@@ -115,7 +157,9 @@ def save_classification_plots(
     bar_path = out_dir / f"{prefix}_per_class_metrics.png"
     fig, ax = plt.subplots(figsize=(max(10, len(class_names) * 2), 5))
     for i, metric in enumerate(metrics):
-        values = [report.get(str(c), {}).get(metric, 0.0) for c in range(len(class_names))]
+        values = [
+            report.get(str(c), {}).get(metric, 0.0) for c in range(len(class_names))
+        ]
         ax.bar(x + i * width, values, width, label=metric)
 
     ax.set_xticks(x + width)

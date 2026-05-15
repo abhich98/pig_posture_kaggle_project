@@ -6,17 +6,17 @@ from pathlib import Path
 from typing import Any
 import logging
 
-import cv2
 import numpy as np
 import pandas as pd
 import torch
-from ultralytics import YOLO
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
 from ultralytics.models.yolo.classify.val import ClassificationValidator
 
 from pig_pipeline.training.metrics import macro_f1
-from pig_pipeline.training.utills import calibrate_probs, compute_classification_metrics
-
+from pig_pipeline.training.utills import (
+    flush_torch_memory,
+    compute_classification_metrics,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,38 +24,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("yolo_training")
-
-
-def flush_inference_memory_2() -> None:
-    """Release Python and CUDA cached memory between large inference phases."""
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        if hasattr(torch.cuda, "ipc_collect"):
-            torch.cuda.ipc_collect()
-
-def flush_inference_memory() -> None:
-    """Release Python and CUDA cached memory when multiple GPUs are in use."""
-    gc.collect()
-    if not torch.cuda.is_available():
-        return
-
-    device_count = torch.cuda.device_count()
-    if device_count <= 1:
-        torch.cuda.empty_cache()
-        if hasattr(torch.cuda, "ipc_collect"):
-            torch.cuda.ipc_collect()
-        return
-
-    current_device = torch.cuda.current_device()
-    try:
-        for idx in range(device_count):
-            torch.cuda.set_device(idx)
-            torch.cuda.empty_cache()
-            if hasattr(torch.cuda, "ipc_collect"):
-                torch.cuda.ipc_collect()
-    finally:
-        torch.cuda.set_device(current_device)
 
 
 class F1ClassificationValidator(ClassificationValidator):
@@ -67,7 +35,9 @@ class F1ClassificationValidator(ClassificationValidator):
     def get_stats(self) -> dict[str, float]:
         stats = super().get_stats()
 
-        targets = np.concatenate([t.numpy().reshape(-1) for t in self.targets]).astype(int)
+        targets = np.concatenate([t.numpy().reshape(-1) for t in self.targets]).astype(
+            int
+        )
         preds_topk = np.concatenate([p.numpy() for p in self.pred], axis=0)
         preds_top1 = preds_topk[:, 0].astype(int)
 
@@ -100,18 +70,22 @@ class F1ClassificationTrainer(ClassificationTrainer):
         )
 
 
-def load_yolo_model(weights: str) -> YOLO:
+def load_model(weights: str):
+    from ultralytics import YOLO
+
     try:
         return YOLO(weights)
     except Exception:
-        logger.warning(f"Failed to load model with weights '{weights}', falling back to 'yolov8n-cls.pt'.")
+        logger.warning(
+            f"Failed to load model with weights '{weights}', falling back to 'yolov8n-cls.pt'."
+        )
         if weights != "yolov8n-cls.pt":
             return YOLO("yolov8n-cls.pt")
         raise
 
 
 def train_classifier(
-    model: YOLO,
+    model,
     dataset_dir: str | Path,
     train_args: dict[str, Any],
 ) -> Path:
@@ -119,7 +93,11 @@ def train_classifier(
     use_f1_selection = bool(resolved_train_args.pop("use_f1_selection", False))
 
     if use_f1_selection:
-        results = model.train(trainer=F1ClassificationTrainer, data=str(dataset_dir), **resolved_train_args)
+        results = model.train(
+            trainer=F1ClassificationTrainer,
+            data=str(dataset_dir),
+            **resolved_train_args,
+        )
     else:
         results = model.train(data=str(dataset_dir), **resolved_train_args)
 
@@ -127,7 +105,7 @@ def train_classifier(
     return Path(model.trainer.best)
 
 
-def _predict_single(model: YOLO, image_path: str | Path) -> tuple[int, np.ndarray]:
+def _predict_single(model, image_path: str | Path) -> tuple[int, np.ndarray]:
     out = model.predict(source=str(image_path), verbose=False)
     top1 = int(out[0].probs.top1)
     probs = out[0].probs.data.detach().cpu().numpy()
@@ -135,7 +113,7 @@ def _predict_single(model: YOLO, image_path: str | Path) -> tuple[int, np.ndarra
 
 
 def _predict_batch(
-    model: YOLO,
+    model,
     image_paths: list[str | Path],
     chunk: int = 1000,
     imgsz: int = 320,
@@ -158,51 +136,71 @@ def _predict_batch(
     paths = [str(p) for p in image_paths]
     top1_list = []
     probs_list = []
-    
+
     # 1. Process in smaller "chunks" to prevent massive preprocessing allocation
     for i in range(0, len(paths), chunk):
         chunk_paths = paths[i : i + chunk]
-        
+
         # Use torch.no_grad() to ensure no gradient history is saved
         with torch.no_grad():
-            for r in model.predict(source=chunk_paths, verbose=False, imgsz=imgsz, batch=batch, stream=True):
+            for r in model.predict(
+                source=chunk_paths, verbose=False, imgsz=imgsz, batch=batch, stream=True
+            ):
                 top1_list.append(int(r.probs.top1))
                 probs_list.append(r.probs.data.detach().cpu().numpy())
-        
+
         # 2. Periodic Memory Clearing
-        flush_inference_memory()
+        flush_torch_memory()
         gc.collect()
 
     return np.array(top1_list), np.stack(probs_list, axis=0)
 
 
-def evaluate_on_split(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any]) -> dict[str, Any]:
+def evaluate_on_split(
+    model,
+    val_df: pd.DataFrame,
+    inf_args: dict[str, Any],
+    return_predictions: bool = False,
+) -> dict[str, Any]:
     paths = val_df["crop_path"].tolist()
     y_true = val_df["class_id"].astype(int).tolist()
 
-    logger.info(f"Evaluating {len(paths)} validation samples (batch={inf_args.get('batch', 64)})...")
+    logger.info("Evaluating %d validation samples...", len(paths))
     y_pred_arr, _ = _predict_batch(model, paths, **inf_args)
     y_pred = y_pred_arr.tolist()
 
-    return compute_classification_metrics(y_true, y_pred)
+    return compute_classification_metrics(
+        y_true, y_pred, return_predictions=return_predictions
+    )
 
 
-def predict_test_top1(model: YOLO, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> pd.DataFrame:
+def predict_test_top1(
+    model, test_df: pd.DataFrame, inf_args: dict[str, Any]
+) -> pd.DataFrame:
     paths = test_df["crop_path"].tolist()
-    logger.info(f"Predicting top-1 for {len(paths)} test samples (batch={inf_args.get('batch', 64)})...")
+    logger.info("Predicting top-1 for %d test samples...", len(paths))
     top1_arr, _ = _predict_batch(model, paths, **inf_args)
-    return pd.DataFrame({"row_id": test_df["row_id"].astype(str).tolist(), "class_id": top1_arr.tolist()})
+    return pd.DataFrame(
+        {
+            "row_id": test_df["row_id"].astype(str).tolist(),
+            "class_id": top1_arr.tolist(),
+        }
+    )
 
 
-def predict_test_probs(model: YOLO, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> np.ndarray:
+def predict_test_probs(
+    model, test_df: pd.DataFrame, inf_args: dict[str, Any]
+) -> np.ndarray:
     """Return softmax probabilities for every test sample, shape (n_samples, n_classes)."""
     paths = test_df["crop_path"].tolist()
-    logger.info(f"Predicting probs for {len(paths)} test samples (batch={inf_args.get('batch', 64)})...")
+    logger.info("Predicting probs for %d test samples...", len(paths))
     _, probs = _predict_batch(model, paths, **inf_args)
     return probs
 
 
-def collect_val_probs(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+def collect_val_probs(
+    model, val_df: pd.DataFrame, inf_args: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray]:
     """Collect softmax probabilities and true labels on the validation split.
 
     Returns
@@ -212,6 +210,6 @@ def collect_val_probs(model: YOLO, val_df: pd.DataFrame, inf_args: dict[str, Any
     """
     paths = val_df["crop_path"].tolist()
     y_true = val_df["class_id"].astype(int).to_numpy()
-    logger.info(f"Collecting val probs for {len(paths)} samples (batch={inf_args.get('batch', 64)})...")
+    logger.info("Collecting val probabilities for %d samples...", len(paths))
     _, probs = _predict_batch(model, paths, **inf_args)
     return probs, y_true

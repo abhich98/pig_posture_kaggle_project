@@ -11,8 +11,12 @@ import pandas as pd
 from pig_pipeline.config import ensure_dir, load_config
 from pig_pipeline.tracking import RunTracker
 from pig_pipeline.training.utills import save_metrics_json
-from pig_pipeline.training.yolo import evaluate_on_split, load_yolo_model, predict_test_top1, train_classifier
-
+from pig_pipeline.training.yolo import (
+    evaluate_on_split,
+    load_yolo_model,
+    predict_test_top1,
+    train_classifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,7 +27,9 @@ logger = logging.getLogger("yolo_single_training")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run YOLO single-split training and inference.")
+    parser = argparse.ArgumentParser(
+        description="Run YOLO single-split training and inference."
+    )
     parser.add_argument("--config", required=True, help="Path to YAML config")
     return parser.parse_args()
 
@@ -46,18 +52,26 @@ def main() -> None:
     train_args["project"] = str(single_root / "runs")
     train_args["name"] = "single"
 
-    best_pt = train_classifier(model, run_root / "yolo_data" / "single", train_args=train_args)
+    best_pt = train_classifier(
+        model, run_root / "yolo_data" / "single", train_args=train_args
+    )
     best_model = load_yolo_model(str(best_pt))
 
     metrics = evaluate_on_split(best_model, val_df, inf_args=dict(cfg["inference"]))
     metrics["model_path"] = str(best_pt)
-    tracker.log({"single/top1": metrics["top1"], "single/macro_f1": metrics["macro_f1"]})
+    tracker.log(
+        {"single/top1": metrics["top1"], "single/macro_f1": metrics["macro_f1"]}
+    )
 
     submission = predict_test_top1(best_model, test_df, inf_args=dict(cfg["inference"]))
-    submission_path = single_root / f"submission_single_{cfg['output']['submission_key']}.csv"
+    submission_path = (
+        single_root / f"submission_single_{cfg['output']['submission_key']}.csv"
+    )
     submission.to_csv(submission_path, index=False)
 
-    metrics_path = single_root / f"metrics_single_{cfg['output']['submission_key']}.json"
+    metrics_path = (
+        single_root / f"metrics_single_{cfg['output']['submission_key']}.json"
+    )
     save_metrics_json(metrics, metrics_path)
 
     tracker.log_file("single_metrics", metrics_path)

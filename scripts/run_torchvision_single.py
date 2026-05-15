@@ -15,8 +15,11 @@ from pig_pipeline.training.torchvision import (
     predict_test_top1,
     train_torchvision_classifier,
 )
-from pig_pipeline.training.utills import load_class_names, save_classification_plots, save_metrics_json
-
+from pig_pipeline.training.utills import (
+    load_class_names,
+    save_classification_plots,
+    save_metrics_json,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,11 +29,13 @@ logging.basicConfig(
 logger = logging.getLogger("torchvision_single_training")
 
 # Enable Tensor Core optimization for float32 matmul operations
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision("high")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run torchvision+Lightning single-split training and inference.")
+    parser = argparse.ArgumentParser(
+        description="Run torchvision+Lightning single-split training and inference."
+    )
     parser.add_argument("--config", required=True, help="Path to YAML config")
     return parser.parse_args()
 
@@ -52,7 +57,9 @@ def main() -> None:
     val_df = pd.read_csv(run_root / "splits" / "single" / "val.csv")
     test_df = pd.read_csv(run_root / "prepared" / "test_metadata.csv")
 
-    tracker = RunTracker(cfg, run_name=f"{cfg['output']['run_name']}-torchvision-single")
+    tracker = RunTracker(
+        cfg, run_name=f"{cfg['output']['run_name']}-torchvision-single"
+    )
 
     i = 0
     while (single_root / f"runs-{i:02d}").exists():
@@ -76,7 +83,9 @@ def main() -> None:
         "imgsz": int(inf_cfg.get("imgsz", 224)),
     }
 
-    metrics = evaluate_on_split(best_model, val_df, inf_args=inf_args, return_predictions=True)
+    metrics = evaluate_on_split(
+        best_model, val_df, inf_args=inf_args, return_predictions=True
+    )
     metrics["model_path"] = str(artifacts.best_ckpt)
     metrics["best_score"] = artifacts.best_score
 
@@ -86,9 +95,14 @@ def main() -> None:
             "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/pig_posture_classes.txt",
         )
     )
-    class_names = load_class_names(class_file, fallback_n_classes=int(max(metrics["y_true"]) + 1))
+    class_names = load_class_names(
+        class_file, fallback_n_classes=int(max(metrics["y_true"]) + 1)
+    )
 
-    metrics_path = single_root / f"metrics_single_torchvision_{cfg['output']['submission_key']}.json"
+    metrics_path = (
+        single_root
+        / f"metrics_single_torchvision_{cfg['output']['submission_key']}.json"
+    )
     save_metrics_json(
         {
             "top1": metrics["top1"],
@@ -110,13 +124,18 @@ def main() -> None:
     )
 
     submission = predict_test_top1(best_model, test_df, inf_args=inf_args)
-    submission_path = single_root / f"submission_single_torchvision_{cfg['output']['submission_key']}.csv"
+    submission_path = (
+        single_root
+        / f"submission_single_torchvision_{cfg['output']['submission_key']}.csv"
+    )
     submission.to_csv(submission_path, index=False)
 
-    tracker.log({
-        "single_torchvision/top1": metrics["top1"],
-        "single_torchvision/macro_f1": metrics["macro_f1"],
-    })
+    tracker.log(
+        {
+            "single_torchvision/top1": metrics["top1"],
+            "single_torchvision/macro_f1": metrics["macro_f1"],
+        }
+    )
     tracker.log_file("single_torchvision_metrics", metrics_path)
     tracker.log_file("single_torchvision_confusion_matrix", cm_path)
     tracker.log_file("single_torchvision_per_class", bar_path)

@@ -77,7 +77,7 @@ augment:
 
 inference:
   batch: 128
-  num_workers: 6
+  workers: 6
   imgsz: 320
 
 wandb:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,22 +18,16 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
 from pig_pipeline.training.metrics import macro_f1
-from pig_pipeline.training.utills import compute_classification_metrics
-
+from pig_pipeline.training.utills import (
+    flush_torch_memory,
+    compute_classification_metrics,
+)
 
 logger = logging.getLogger("torchvision_training")
 
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-
-
-def flush_torch_memory() -> None:
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        if hasattr(torch.cuda, "ipc_collect"):
-            torch.cuda.ipc_collect()
 
 
 class CropClassificationDataset(Dataset):
@@ -66,7 +59,9 @@ class CropClassificationDataset(Dataset):
 
 
 class CropPathDataset(Dataset):
-    def __init__(self, image_paths: list[str | Path], transform: transforms.Compose) -> None:
+    def __init__(
+        self, image_paths: list[str | Path], transform: transforms.Compose
+    ) -> None:
         self.image_paths = [Path(str(p)) for p in image_paths]
         self.transform = transform
 
@@ -105,8 +100,12 @@ class CropDataModule(pl.LightningDataModule):
 
     def setup(self, stage: str | None = None) -> None:
         _ = stage
-        self.train_ds = CropClassificationDataset(self.train_df, self.train_transform, with_labels=True)
-        self.val_ds = CropClassificationDataset(self.val_df, self.eval_transform, with_labels=True)
+        self.train_ds = CropClassificationDataset(
+            self.train_df, self.train_transform, with_labels=True
+        )
+        self.val_ds = CropClassificationDataset(
+            self.val_df, self.eval_transform, with_labels=True
+        )
 
     def train_dataloader(self) -> DataLoader:
         assert self.train_ds is not None
@@ -133,7 +132,9 @@ class CropDataModule(pl.LightningDataModule):
         )
 
 
-def _build_backbone(model_name: str, num_classes: int, pretrained: bool, dropout: float) -> nn.Module:
+def _build_backbone(
+    model_name: str, num_classes: int, pretrained: bool, dropout: float
+) -> nn.Module:
     name = model_name.lower().replace("-", "_")
 
     if name == "convnext_tiny":
@@ -160,7 +161,9 @@ def _build_backbone(model_name: str, num_classes: int, pretrained: bool, dropout
         weights = models.ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
         model = models.resnet50(weights=weights)
         in_features = model.fc.in_features
-        model.fc = nn.Sequential(nn.Dropout(p=float(dropout)), nn.Linear(in_features, num_classes))
+        model.fc = nn.Sequential(
+            nn.Dropout(p=float(dropout)), nn.Linear(in_features, num_classes)
+        )
         return model
 
     raise ValueError(
@@ -208,7 +211,9 @@ class LitImageClassifier(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         _ = batch_idx
         x, y = batch
         logits = self(x)
@@ -218,24 +223,37 @@ class LitImageClassifier(pl.LightningModule):
             weight=self.class_weights,
             label_smoothing=self.label_smoothing,
         )
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=x.size(0))
+        self.log(
+            "train_loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=x.size(0),
+        )
         return loss
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def validation_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         _ = batch_idx
         x, y = batch
         logits = self(x)
         loss = F.cross_entropy(
-            logits, 
-            y, 
-            weight=self.class_weights,
-            label_smoothing=self.label_smoothing
+            logits, y, weight=self.class_weights, label_smoothing=self.label_smoothing
         )
         preds = torch.argmax(logits, dim=1)
 
         self._val_preds.append(preds.detach().cpu())
         self._val_targets.append(y.detach().cpu())
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=x.size(0))
+        self.log(
+            "val_loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=x.size(0),
+        )
         return loss
 
     def on_validation_epoch_end(self) -> None:
@@ -250,12 +268,28 @@ class LitImageClassifier(pl.LightningModule):
         top1 = float(np.mean(y_pred == y_true))
         macro = macro_f1(y_true.tolist(), y_pred.tolist())
 
-        self.log("val_top1", top1, on_step=False, on_epoch=True, prog_bar=True, sync_dist=False)
-        self.log("val_macro_f1", macro, on_step=False, on_epoch=True, prog_bar=True, sync_dist=False)
+        self.log(
+            "val_top1",
+            top1,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=False,
+        )
+        self.log(
+            "val_macro_f1",
+            macro,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=False,
+        )
 
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = CosineAnnealingLR(optimizer, T_max=max(1, self.max_epochs), eta_min=self.lr * 0.01)
+        scheduler = CosineAnnealingLR(
+            optimizer, T_max=max(1, self.max_epochs), eta_min=self.lr * 0.01
+        )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -291,7 +325,9 @@ def _precision_from_config(value: Any) -> str | int:
     return str(value)
 
 
-def build_transforms(img_size: int, aug_cfg: dict[str, Any] | None = None) -> tuple[transforms.Compose, transforms.Compose]:
+def build_transforms(
+    img_size: int, aug_cfg: dict[str, Any] | None = None
+) -> tuple[transforms.Compose, transforms.Compose]:
     aug_cfg = aug_cfg or {}
     img_size = int(img_size)
 
@@ -299,8 +335,14 @@ def build_transforms(img_size: int, aug_cfg: dict[str, Any] | None = None) -> tu
         [
             transforms.RandomResizedCrop(
                 size=img_size,
-                scale=(float(aug_cfg.get("scale_min", 0.65)), float(aug_cfg.get("scale_max", 1.0))),
-                ratio=(float(aug_cfg.get("ratio_min", 0.75)), float(aug_cfg.get("ratio_max", 1.33))),
+                scale=(
+                    float(aug_cfg.get("scale_min", 0.65)),
+                    float(aug_cfg.get("scale_max", 1.0)),
+                ),
+                ratio=(
+                    float(aug_cfg.get("ratio_min", 0.75)),
+                    float(aug_cfg.get("ratio_max", 1.33)),
+                ),
                 interpolation=transforms.InterpolationMode.BILINEAR,
             ),
             transforms.RandomApply(
@@ -326,8 +368,14 @@ def build_transforms(img_size: int, aug_cfg: dict[str, Any] | None = None) -> tu
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             transforms.RandomErasing(
                 p=float(aug_cfg.get("erasing_p", 0.25)),
-                scale=(float(aug_cfg.get("erase_scale_min", 0.02)), float(aug_cfg.get("erase_scale_max", 0.2))),
-                ratio=(float(aug_cfg.get("erase_ratio_min", 0.3)), float(aug_cfg.get("erase_ratio_max", 3.3))),
+                scale=(
+                    float(aug_cfg.get("erase_scale_min", 0.02)),
+                    float(aug_cfg.get("erase_scale_max", 0.2)),
+                ),
+                ratio=(
+                    float(aug_cfg.get("erase_ratio_min", 0.3)),
+                    float(aug_cfg.get("erase_ratio_max", 3.3)),
+                ),
             ),
         ]
     )
@@ -335,7 +383,10 @@ def build_transforms(img_size: int, aug_cfg: dict[str, Any] | None = None) -> tu
     resize_size = int(round(img_size * float(aug_cfg.get("eval_resize_ratio", 1.14))))
     eval_transform = transforms.Compose(
         [
-            transforms.Resize((resize_size, resize_size), interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.Resize(
+                (resize_size, resize_size),
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
             transforms.CenterCrop(img_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
@@ -396,12 +447,18 @@ def train_torchvision_classifier(
         weights = np.power(inv_freq, cls_pw)
         weights = weights / max(float(weights.mean()), 1e-12)
         class_weights = weights.astype(np.float32).tolist()
-        logger.info("Using class-weighted CE loss with cls_pw=%.3f, weights=%s", cls_pw, class_weights)
+        logger.info(
+            "Using class-weighted CE loss with cls_pw=%.3f, weights=%s",
+            cls_pw,
+            class_weights,
+        )
 
     pl.seed_everything(int(train_cfg.get("seed", 42)), workers=True)
 
     img_size = int(data_cfg.get("img_size", 224))
-    train_transform, eval_transform = build_transforms(img_size=img_size, aug_cfg=aug_cfg)
+    train_transform, eval_transform = build_transforms(
+        img_size=img_size, aug_cfg=aug_cfg
+    )
 
     datamodule = CropDataModule(
         train_df=train_df,
@@ -409,7 +466,7 @@ def train_torchvision_classifier(
         train_transform=train_transform,
         eval_transform=eval_transform,
         batch_size=int(train_cfg.get("batch", 32)),
-        num_workers=int(train_cfg.get("workers", train_cfg.get("num_workers", 4))),
+        num_workers=int(train_cfg.get("workers", 4)),
         pin_memory=bool(train_cfg.get("pin_memory", torch.cuda.is_available())),
     )
 
@@ -480,27 +537,28 @@ def train_torchvision_classifier(
     )
     best_model.eval()
 
-    return TorchvisionTrainArtifacts(best_ckpt=Path(best_path), best_score=best_score, model=best_model)
+    return TorchvisionTrainArtifacts(
+        best_ckpt=Path(best_path), best_score=best_score, model=best_model
+    )
 
 
 def _predict_batch(
     model: LitImageClassifier,
     image_paths: list[str | Path],
-    inf_args: dict[str, Any],
+    batch: int = 64,
+    workers: int = 4,
+    imgsz: int = 224,
 ) -> tuple[np.ndarray, np.ndarray]:
-    batch_size = int(inf_args.get("batch", 64))
-    num_workers = int(inf_args.get("num_workers", 4))
-    imgsz = int(inf_args.get("imgsz", 224))
 
     _, eval_transform = build_transforms(img_size=imgsz, aug_cfg={})
     dataset = CropPathDataset(image_paths=image_paths, transform=eval_transform)
     loader = DataLoader(
         dataset,
-        batch_size=batch_size,
+        batch_size=batch,
         shuffle=False,
-        num_workers=num_workers,
+        num_workers=workers,
         pin_memory=torch.cuda.is_available(),
-        persistent_workers=num_workers > 0,
+        persistent_workers=workers > 0,
         drop_last=False,
     )
 
@@ -535,29 +593,42 @@ def evaluate_on_split(
     y_true = val_df["class_id"].astype(int).tolist()
 
     logger.info("Evaluating %d validation samples...", len(paths))
-    y_pred_arr, _ = _predict_batch(model, paths, inf_args=inf_args)
+    y_pred_arr, _ = _predict_batch(model, paths, **inf_args)
     y_pred = y_pred_arr.tolist()
 
-    return compute_classification_metrics(y_true, y_pred, return_predictions=return_predictions)
+    return compute_classification_metrics(
+        y_true, y_pred, return_predictions=return_predictions
+    )
 
 
-def predict_test_top1(model: LitImageClassifier, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> pd.DataFrame:
+def predict_test_top1(
+    model: LitImageClassifier, test_df: pd.DataFrame, inf_args: dict[str, Any]
+) -> pd.DataFrame:
     paths = test_df["crop_path"].tolist()
     logger.info("Predicting top-1 for %d test samples...", len(paths))
-    top1_arr, _ = _predict_batch(model, paths, inf_args=inf_args)
-    return pd.DataFrame({"row_id": test_df["row_id"].astype(str).tolist(), "class_id": top1_arr.tolist()})
+    top1_arr, _ = _predict_batch(model, paths, **inf_args)
+    return pd.DataFrame(
+        {
+            "row_id": test_df["row_id"].astype(str).tolist(),
+            "class_id": top1_arr.tolist(),
+        }
+    )
 
 
-def predict_test_probs(model: LitImageClassifier, test_df: pd.DataFrame, inf_args: dict[str, Any]) -> np.ndarray:
+def predict_test_probs(
+    model: LitImageClassifier, test_df: pd.DataFrame, inf_args: dict[str, Any]
+) -> np.ndarray:
     paths = test_df["crop_path"].tolist()
     logger.info("Predicting probabilities for %d test samples...", len(paths))
-    _, probs = _predict_batch(model, paths, inf_args=inf_args)
+    _, probs = _predict_batch(model, paths, **inf_args)
     return probs
 
 
-def collect_val_probs(model: LitImageClassifier, val_df: pd.DataFrame, inf_args: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+def collect_val_probs(
+    model: LitImageClassifier, val_df: pd.DataFrame, inf_args: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray]:
     paths = val_df["crop_path"].tolist()
     y_true = val_df["class_id"].astype(int).to_numpy()
     logger.info("Collecting val probabilities for %d samples...", len(paths))
-    _, probs = _predict_batch(model, paths, inf_args=inf_args)
+    _, probs = _predict_batch(model, paths, **inf_args)
     return probs, y_true

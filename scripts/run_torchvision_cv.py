@@ -4,7 +4,6 @@ import argparse
 import json
 import logging
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
@@ -26,7 +25,6 @@ from pig_pipeline.training.utills import (
     save_metrics_json,
 )
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s",
@@ -35,11 +33,13 @@ logging.basicConfig(
 logger = logging.getLogger("torchvision_cv_training")
 
 # Enable Tensor Core optimization for float32 matmul operations
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision("high")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run torchvision+Lightning 5-fold CV + calibrated probability ensemble.")
+    parser = argparse.ArgumentParser(
+        description="Run torchvision+Lightning 5-fold CV + calibrated probability ensemble."
+    )
     parser.add_argument("--config", required=True, help="Path to YAML config")
     return parser.parse_args()
 
@@ -51,7 +51,9 @@ def _common_inf_args(cfg: dict) -> dict[str, int]:
     return {
         "batch": int(inf_cfg.get("batch", train_cfg.get("batch", 32))),
         "num_workers": int(inf_cfg.get("num_workers", train_cfg.get("workers", 4))),
-        "imgsz": int(inf_cfg.get("imgsz", data_cfg.get("img_size", train_cfg.get("imgsz", 224)))),
+        "imgsz": int(
+            inf_cfg.get("imgsz", data_cfg.get("img_size", train_cfg.get("imgsz", 224)))
+        ),
     }
 
 
@@ -76,8 +78,12 @@ def main() -> None:
     inf_args = _common_inf_args(cfg)
 
     for fold_idx in range(n_folds):
-        fold_train_df = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "train.csv")
-        fold_val_df = pd.read_csv(run_root / "splits" / "cv" / f"fold_{fold_idx}" / "val.csv")
+        fold_train_df = pd.read_csv(
+            run_root / "splits" / "cv" / f"fold_{fold_idx}" / "train.csv"
+        )
+        fold_val_df = pd.read_csv(
+            run_root / "splits" / "cv" / f"fold_{fold_idx}" / "val.csv"
+        )
 
         fold_tracker = RunTracker(
             cfg,
@@ -96,7 +102,9 @@ def main() -> None:
             aug_cfg=aug_cfg,
         )
 
-        metrics = evaluate_on_split(artifacts.model, fold_val_df, inf_args=inf_args, return_predictions=True)
+        metrics = evaluate_on_split(
+            artifacts.model, fold_val_df, inf_args=inf_args, return_predictions=True
+        )
 
         fold_class_file = Path(
             data_cfg.get(
@@ -104,7 +112,9 @@ def main() -> None:
                 "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/pig_posture_classes.txt",
             )
         )
-        class_names = load_class_names(fold_class_file, fallback_n_classes=int(max(metrics["y_true"]) + 1))
+        class_names = load_class_names(
+            fold_class_file, fallback_n_classes=int(max(metrics["y_true"]) + 1)
+        )
 
         fold_metrics_path = cv_root / f"fold_{fold_idx}_metrics_torchvision.json"
         save_metrics_json(
@@ -139,7 +149,9 @@ def main() -> None:
         fold_tracker.log_file(f"fold_{fold_idx}_torchvision_cm", cm_path)
         fold_tracker.log_file(f"fold_{fold_idx}_torchvision_per_class", bar_path)
 
-        val_probs, y_val_true = collect_val_probs(artifacts.model, fold_val_df, inf_args=inf_args)
+        val_probs, y_val_true = collect_val_probs(
+            artifacts.model, fold_val_df, inf_args=inf_args
+        )
         test_probs = predict_test_probs(artifacts.model, test_df, inf_args=inf_args)
         calibrated_test_probs = calibrate_probs(val_probs, y_val_true, test_probs)
         test_probs_all.append(calibrated_test_probs)
@@ -170,15 +182,22 @@ def main() -> None:
     pred_classes = np.argmax(avg_probs, axis=1).astype(int)
 
     submission = pd.DataFrame({"row_id": test_df["row_id"], "class_id": pred_classes})
-    submission_path = cv_root / f"submission_cv_torchvision_ensemble_{cfg['output']['submission_key']}.csv"
+    submission_path = (
+        cv_root
+        / f"submission_cv_torchvision_ensemble_{cfg['output']['submission_key']}.csv"
+    )
     submission.to_csv(submission_path, index=False)
 
-    fold_metrics_all_path = cv_root / f"fold_metrics_torchvision_{cfg['output']['submission_key']}.json"
+    fold_metrics_all_path = (
+        cv_root / f"fold_metrics_torchvision_{cfg['output']['submission_key']}.json"
+    )
     with fold_metrics_all_path.open("w", encoding="utf-8") as f:
         json.dump(fold_scores, f, indent=2)
 
     oof_df = pd.concat(oof_rows, axis=0, ignore_index=True)
-    oof_path = cv_root / f"oof_predictions_torchvision_{cfg['output']['submission_key']}.csv"
+    oof_path = (
+        cv_root / f"oof_predictions_torchvision_{cfg['output']['submission_key']}.csv"
+    )
     oof_df.to_csv(oof_path, index=False)
 
     y_true_all = oof_df["class_id_true"].astype(int).tolist()
@@ -191,9 +210,13 @@ def main() -> None:
             "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/pig_posture_classes.txt",
         )
     )
-    class_names = load_class_names(class_file, fallback_n_classes=int(max(y_true_all) + 1))
+    class_names = load_class_names(
+        class_file, fallback_n_classes=int(max(y_true_all) + 1)
+    )
 
-    oof_metrics_path = cv_root / f"oof_metrics_torchvision_{cfg['output']['submission_key']}.json"
+    oof_metrics_path = (
+        cv_root / f"oof_metrics_torchvision_{cfg['output']['submission_key']}.json"
+    )
     save_metrics_json(oof_metrics, oof_metrics_path)
 
     oof_cm_path, oof_bar_path = save_classification_plots(
@@ -210,10 +233,12 @@ def main() -> None:
         run_name=f"{cfg['output']['run_name']}-torchvision-cv-ensemble",
         group=cfg["output"]["run_name"],
     )
-    final_tracker.log({
-        "cv_torchvision/oof_top1": oof_metrics["top1"],
-        "cv_torchvision/oof_macro_f1": oof_metrics["macro_f1"],
-    })
+    final_tracker.log(
+        {
+            "cv_torchvision/oof_top1": oof_metrics["top1"],
+            "cv_torchvision/oof_macro_f1": oof_metrics["macro_f1"],
+        }
+    )
     final_tracker.log_file("cv_torchvision_fold_metrics", fold_metrics_all_path)
     final_tracker.log_file("cv_torchvision_oof_predictions", oof_path)
     final_tracker.log_file("cv_torchvision_oof_metrics", oof_metrics_path)
