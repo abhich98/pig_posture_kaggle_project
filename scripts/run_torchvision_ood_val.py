@@ -9,11 +9,10 @@ import torch
 
 from pig_pipeline.config import load_config
 from pig_pipeline.training.torchvision import (
-    _predict_batch,
+    evaluate_on_split,
     load_torchvision_model_from_checkpoint,
 )
 from pig_pipeline.training.utills import (
-    compute_classification_metrics,
     load_class_names,
     save_classification_plots,
     save_metrics_json,
@@ -45,35 +44,32 @@ def parse_args() -> argparse.Namespace:
         help="Torchvision training run directory that contains .ckpt files (usually .../single_strategy_torchvision/runs)",
     )
     parser.add_argument(
+        "--weights-name",
+        default="best",
+        help="Name of the checkpoint file to use (default: best.ckpt)",
+    )
+    parser.add_argument(
         "--ood-csv",
-        default="/workspace/github/pig_posture_kaggle_project/data/generated/train2_local_run/prepared/train_ood_metadata.csv",
+        default="/workspace/github/pig_posture_kaggle_project/data/generated/train1_local_run/prepared/train_ood_metadata.csv",
         help="CSV with OOD labels that already has crop_path and class_id columns",
     )
     return parser.parse_args()
 
 
-def _resolve_checkpoint(run_dir: Path) -> Path:
+def _resolve_checkpoint(run_dir: Path, weights_name: str = "best") -> Path:
     if run_dir.is_file() and run_dir.suffix == ".ckpt":
         return run_dir
 
     if not run_dir.exists():
         raise FileNotFoundError(f"Torchvision run directory does not exist: {run_dir}")
 
-    best_candidates = sorted(run_dir.glob("best-*.ckpt"))
+    best_candidates = sorted(run_dir.glob(f"*{weights_name}*.ckpt"))
     if not best_candidates:
-        best_candidates = sorted(run_dir.rglob("best-*.ckpt"))
+        best_candidates = sorted(run_dir.rglob(f"*{weights_name}*.ckpt"))
     if best_candidates:
         return best_candidates[-1]
-
-    last_ckpt = run_dir / "last.ckpt"
-    if last_ckpt.exists():
-        return last_ckpt
-
-    nested_last = sorted(run_dir.rglob("last.ckpt"))
-    if nested_last:
-        return nested_last[-1]
-
-    raise FileNotFoundError(f"Could not find checkpoint in: {run_dir}")
+    else:
+        raise FileNotFoundError(f"Could not find checkpoint with name '{weights_name}' in: {run_dir}")
 
 
 def main() -> None:
@@ -105,7 +101,7 @@ def main() -> None:
         class_file, fallback_n_classes=int(ood_df["class_id"].max()) + 1
     )
 
-    ckpt_path = _resolve_checkpoint(run_dir)
+    ckpt_path = _resolve_checkpoint(run_dir, weights_name=args.weights_name)
     logger.info("Using checkpoint: %s", ckpt_path)
 
     num_classes = len(class_names)
@@ -118,23 +114,12 @@ def main() -> None:
     )
     model.eval()
 
-    inf_args = {
-        "batch": int(inf_cfg.get("batch", train_cfg.get("batch", 32))),
-        "num_workers": int(inf_cfg.get("num_workers", train_cfg.get("workers", 4))),
-        "imgsz": int(inf_cfg.get("imgsz", data_cfg.get("img_size", 224))),
-    }
-
-    paths = ood_df["crop_path"].tolist()
-    y_true = ood_df["class_id"].astype(int).tolist()
     logger.info(
-        "Running OOD inference on %d samples (inf_args=%s)...", len(paths), inf_args
+        "Running OOD inference on %d samples ...", len(ood_df)
     )
-    y_pred_arr, _ = _predict_batch(model, paths, inf_args=inf_args)
-    y_pred = y_pred_arr.tolist()
+    metrics = evaluate_on_split(model, ood_df, inf_args=inf_cfg, return_predictions=True)
 
-    metrics = compute_classification_metrics(y_true, y_pred, return_predictions=True)
-
-    out_dir = run_dir / "ood_validation"
+    out_dir = run_dir / f"ood_validation_{args.weights_name}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     metrics_path = out_dir / "metrics_ood.json"

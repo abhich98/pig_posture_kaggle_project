@@ -13,7 +13,7 @@ from pig_pipeline.tracking import RunTracker
 from pig_pipeline.training.utills import save_metrics_json
 from pig_pipeline.training.yolo import (
     evaluate_on_split,
-    load_yolo_model,
+    load_model,
     predict_test_top1,
     train_classifier,
 )
@@ -47,7 +47,7 @@ def main() -> None:
 
     tracker = RunTracker(cfg, run_name=f"{cfg['output']['run_name']}-single")
 
-    model = load_yolo_model(cfg["model"]["weights"])
+    model = load_model(cfg["model"]["weights"])
     train_args = dict(cfg["train"])
     train_args["project"] = str(single_root / "runs")
     train_args["name"] = "single"
@@ -55,7 +55,7 @@ def main() -> None:
     best_pt = train_classifier(
         model, run_root / "yolo_data" / "single", train_args=train_args
     )
-    best_model = load_yolo_model(str(best_pt))
+    best_model = load_model(str(best_pt))
 
     metrics = evaluate_on_split(best_model, val_df, inf_args=dict(cfg["inference"]))
     metrics["model_path"] = str(best_pt)

@@ -13,11 +13,10 @@ import seaborn as sns
 from sklearn.metrics import confusion_matrix
 
 from pig_pipeline.config import load_config
-from pig_pipeline.training.metrics import macro_f1, per_class_report
+from pig_pipeline.training.utills import flush_torch_memory
 from pig_pipeline.training.yolo import (
-    load_yolo_model,
-    _predict_batch,
-    flush_inference_memory,
+    evaluate_on_split,
+    load_model,
 )
 
 logging.basicConfig(
@@ -43,17 +42,22 @@ def parse_args() -> argparse.Namespace:
         help="YOLO training run directory that contains weights/best.pt",
     )
     parser.add_argument(
+        "--weights-name",
+        default="best",
+        help="Name of the weights file to use (default: best.pt)",
+    )
+    parser.add_argument(
         "--ood-csv",
-        default="/workspace/github/pig_posture_kaggle_project/data/generated/train2_local_run/prepared/train_ood_metadata.csv",
+        default="/workspace/github/pig_posture_kaggle_project/data/generated/train1_local_run/prepared/train_ood_metadata.csv",
         help="CSV with OOD labels that already has crop_path and class_id columns",
     )
     return parser.parse_args()
 
 
-def _resolve_weights(run_dir: Path) -> Path:
-    weights_path = run_dir / "weights" / "best.pt"
+def _resolve_weights(run_dir: Path, weights_name: str) -> Path:
+    weights_path = run_dir / "weights" / f"{weights_name}.pt"
     if not weights_path.exists():
-        raise FileNotFoundError(f"Could not find best weights at: {weights_path}")
+        raise FileNotFoundError(f"Could not find weights at: {weights_path}")
     return weights_path
 
 
@@ -127,7 +131,7 @@ def main() -> None:
     if not ood_csv.exists():
         raise FileNotFoundError(f"OOD CSV does not exist: {ood_csv}")
 
-    weights_path = _resolve_weights(yolo_run_dir)
+    weights_path = _resolve_weights(yolo_run_dir, args.weights_name)
     logger.info("Using weights: %s", weights_path)
 
     ood_df = pd.read_csv(ood_csv)
@@ -135,28 +139,21 @@ def main() -> None:
         raise ValueError("OOD CSV must contain 'crop_path' and 'class_id' columns")
     logger.info("Loaded OOD CSV: %d samples from %s", len(ood_df), ood_csv)
 
-    model = load_yolo_model(str(weights_path))
-    flush_inference_memory()
+    model = load_model(str(weights_path))
+    flush_torch_memory()
 
-    # Single inference pass — derive all metrics from the raw predictions.
-    paths = ood_df["crop_path"].tolist()
-    y_true = ood_df["class_id"].astype(int).tolist()
     logger.info(
-        "Running OOD inference on %d samples (inf_args=%s)...", len(paths), inf_args
+        "Running OOD inference on %d samples (inf_args=%s)...", len(ood_df), inf_args
     )
-    y_pred_arr, _ = _predict_batch(model, paths, **inf_args)
-    flush_inference_memory()
-    y_pred = y_pred_arr.tolist()
+    metrics = evaluate_on_split(model, ood_df, inf_args=inf_args, return_predictions=True)
+    flush_torch_memory()
 
-    top1 = float(np.mean(np.array(y_true) == y_pred_arr))
-    mf1 = macro_f1(y_true, y_pred)
-    report = per_class_report(y_true, y_pred)
-    metrics = {"top1": top1, "macro_f1": mf1, "report": report}
-
+    y_true = metrics["y_true"]
+    y_pred = metrics["y_pred"]
     n_classes = max(max(y_true), max(y_pred)) + 1
     class_names = [str(i) for i in range(n_classes)]
 
-    out_dir = yolo_run_dir / "ood_validation"
+    out_dir = yolo_run_dir / f"ood_validation_{args.weights_name}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     metrics_path = out_dir / "metrics_ood.json"

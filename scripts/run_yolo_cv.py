@@ -14,7 +14,7 @@ from pig_pipeline.training.utills import calibrate_probs, save_metrics_json
 from pig_pipeline.training.yolo import (
     collect_val_probs,
     evaluate_on_split,
-    load_yolo_model,
+    load_model,
     predict_test_probs,
     train_classifier,
 )
@@ -59,7 +59,7 @@ def main() -> None:
             group=cfg["output"]["run_name"],
         )
 
-        model = load_yolo_model(cfg["model"]["weights"])
+        model = load_model(cfg["model"]["weights"])
         train_args = dict(cfg["train"])
         train_args["project"] = str(cv_root / "runs")
         train_args["name"] = f"fold_{fold_idx}"
@@ -69,7 +69,7 @@ def main() -> None:
             run_root / "yolo_data" / "cv" / f"fold_{fold_idx}",
             train_args=train_args,
         )
-        best_model = load_yolo_model(str(best_pt))
+        best_model = load_model(str(best_pt))
 
         metrics = evaluate_on_split(
             best_model, fold_val_df, inf_args=dict(cfg["inference"])

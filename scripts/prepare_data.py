@@ -60,6 +60,7 @@ def main() -> None:
         output_csv_path=train_meta_path,
         img_size=int(data_cfg["img_size"]),
         pad=int(data_cfg["pad"]),
+        keep_aspect_ratio=bool(data_cfg.get("keep_aspect_ratio", True)),
         is_train=True,
         n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
     )
@@ -70,6 +71,7 @@ def main() -> None:
         output_csv_path=test_meta_path,
         img_size=int(data_cfg["img_size"]),
         pad=int(data_cfg["pad"]),
+        keep_aspect_ratio=bool(data_cfg.get("keep_aspect_ratio", True)),
         is_train=False,
         n_jobs=int(data_cfg.get("prep_n_jobs", 1)),
     )

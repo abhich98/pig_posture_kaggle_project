@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@DeprecationWarning
 def _common_inf_args(cfg: dict) -> dict[str, int]:
     data_cfg = cfg["data"]
     train_cfg = cfg.get("train", {})
@@ -65,17 +66,20 @@ def main() -> None:
     model_cfg = cfg.get("model", {})
     train_cfg = cfg.get("train", {})
     aug_cfg = cfg.get("augment", {})
+    inf_cfg = cfg.get("inference", {})
 
     run_root = ensure_dir(Path(cfg["output"]["root"]) / cfg["output"]["run_name"])
     cv_root = ensure_dir(run_root / "cv_strategy_torchvision")
+    i = 0
+    while (cv_root / f"runs-{i:02d}").exists():
+        i += 1
+    cv_run_root = ensure_dir(cv_root / f"runs-{i:02d}")
     n_folds = int(cfg["split"]["n_folds"])
 
     test_df = pd.read_csv(run_root / "prepared" / "test_metadata.csv")
     test_probs_all: list[np.ndarray] = []
     fold_scores: list[dict[str, float | int | str | None]] = []
     oof_rows: list[pd.DataFrame] = []
-
-    inf_args = _common_inf_args(cfg)
 
     for fold_idx in range(n_folds):
         fold_train_df = pd.read_csv(
@@ -91,7 +95,7 @@ def main() -> None:
             group=cfg["output"]["run_name"],
         )
 
-        fold_run_dir = ensure_dir(cv_root / "runs" / f"fold_{fold_idx}")
+        fold_run_dir = ensure_dir(cv_run_root / f"fold_{fold_idx}")
         artifacts = train_torchvision_classifier(
             train_df=fold_train_df,
             val_df=fold_val_df,
@@ -103,7 +107,7 @@ def main() -> None:
         )
 
         metrics = evaluate_on_split(
-            artifacts.model, fold_val_df, inf_args=inf_args, return_predictions=True
+            artifacts.model, fold_val_df, inf_args=inf_cfg, return_predictions=True
         )
 
         fold_class_file = Path(
@@ -116,7 +120,7 @@ def main() -> None:
             fold_class_file, fallback_n_classes=int(max(metrics["y_true"]) + 1)
         )
 
-        fold_metrics_path = cv_root / f"fold_{fold_idx}_metrics_torchvision.json"
+        fold_metrics_path = cv_run_root / f"fold_{fold_idx}_metrics_torchvision.json"
         save_metrics_json(
             {
                 "fold": fold_idx,
@@ -134,7 +138,7 @@ def main() -> None:
             y_pred=metrics["y_pred"],
             report=metrics["report"],
             class_names=class_names,
-            out_dir=cv_root,
+            out_dir=cv_run_root,
             prefix=f"fold_{fold_idx}",
         )
 
@@ -150,9 +154,9 @@ def main() -> None:
         fold_tracker.log_file(f"fold_{fold_idx}_torchvision_per_class", bar_path)
 
         val_probs, y_val_true = collect_val_probs(
-            artifacts.model, fold_val_df, inf_args=inf_args
+            artifacts.model, fold_val_df, inf_args=inf_cfg
         )
-        test_probs = predict_test_probs(artifacts.model, test_df, inf_args=inf_args)
+        test_probs = predict_test_probs(artifacts.model, test_df, inf_args=inf_cfg)
         calibrated_test_probs = calibrate_probs(val_probs, y_val_true, test_probs)
         test_probs_all.append(calibrated_test_probs)
 

@@ -55,6 +55,17 @@ def main() -> None:
 
     train_df = pd.read_csv(run_root / "splits" / "single" / "train.csv")
     val_df = pd.read_csv(run_root / "splits" / "single" / "val.csv")
+    val_df = pd.concat(
+        [
+            val_df[:1000],
+            pd.read_csv(
+                "data/generated/train1_local_run/prepared/train_ood_metadata.csv"
+            ),
+        ],
+        axis=0,
+    )
+    logger.info("Concating OOD samples to part of validation set: {}".format(len(val_df)))
+
     test_df = pd.read_csv(run_root / "prepared" / "test_metadata.csv")
 
     tracker = RunTracker(
@@ -77,14 +88,8 @@ def main() -> None:
     )
     best_model = artifacts.model
 
-    inf_args = {
-        "batch": int(inf_cfg.get("batch", 32)),
-        "num_workers": int(inf_cfg.get("num_workers", 4)),
-        "imgsz": int(inf_cfg.get("imgsz", 224)),
-    }
-
     metrics = evaluate_on_split(
-        best_model, val_df, inf_args=inf_args, return_predictions=True
+        best_model, val_df, inf_args=inf_cfg, return_predictions=True
     )
     metrics["model_path"] = str(artifacts.best_ckpt)
     metrics["best_score"] = artifacts.best_score
@@ -123,7 +128,7 @@ def main() -> None:
         prefix="single",
     )
 
-    submission = predict_test_top1(best_model, test_df, inf_args=inf_args)
+    submission = predict_test_top1(best_model, test_df, inf_args=inf_cfg)
     submission_path = (
         single_root
         / f"submission_single_torchvision_{cfg['output']['submission_key']}.csv"
