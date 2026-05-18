@@ -1,11 +1,12 @@
 data:
-  train_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train2.csv"
+  train_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train1.csv"
   test_csv: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/test.csv"
-  train_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train2_images"
+  train_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/train1_images"
   test_image_dir: "/workspace/github/pig_posture_kaggle_project/data/multiview_pig_posture_recognition/test_images"
   img_size: 320
   pad: 10
-  prep_n_jobs: 6
+  keep_aspect_ratio: true
+  prep_n_jobs: -1
 
 split:
   seed: 42
@@ -13,13 +14,14 @@ split:
   n_folds: 5
 
 model:
-  weights: "yolo11n-cls.pt"
+  weights: "yolo26n-cls.pt"
 
 train:
-  epochs: 35
+  epochs: 20
+  patience: 10
   save_period: 10
   imgsz: 320
-  batch: 0.2
+  batch: 0.3
   device: 0
   workers: 6
   cache: true
@@ -28,15 +30,17 @@ train:
   amp: true
   plots: true
   seed: 42
-  cls_pw: 0.5
-  dropout: 0.1
+  cls_pw: 0.7
+  dropout: 0.2
+  cos_lr: true
+  close_mosaic: 4
 
   fliplr: 0.0
   flipud: 0.0
-  degrees: 20.0
+  degrees: 10.0
   shear: 5.0
   perspective: 0.0005
-  mosaic: 0.5
+  translate: 0.2
 
   use_f1_selection: true
 
@@ -45,14 +49,14 @@ wandb:
   project: "pig-posture-kaggle-SSL"
   entity: null
   mode: "online"
-  tags: ["yolo", "imgaug", "train2", "f1_selection"]
+  tags: ["yolo26n", "imgaug", "train1", "f1_selection", "trial1"]
 
 output:
   root: "data/generated"
   # Dataset key
-  run_name: "train2_local_run"
+  run_name: "train1_local_run"
   # Strategy key
-  submission_key: "train2_imgaug_f1selection"
+  submission_key: "train1_yolo26n_imgaug_f1selection_trial1"
 
 inference:
   batch: 128
