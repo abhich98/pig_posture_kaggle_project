@@ -23,6 +23,7 @@ class RunTracker:
                 name=run_name,
                 group=group,
                 config=config,
+                settings=wandb.Settings(_disable_stats=True)
             )
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:

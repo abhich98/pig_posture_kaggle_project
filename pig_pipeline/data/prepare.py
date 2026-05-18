@@ -59,6 +59,7 @@ def build_crop_metadata(
     output_csv_path: str | Path,
     img_size: int = 224,
     pad: int = 10,
+    keep_aspect_ratio: bool = True,
     is_train: bool = True,
     n_jobs: int = 1,
 ) -> pd.DataFrame:
@@ -81,7 +82,21 @@ def build_crop_metadata(
         for _, row in group_df.iterrows():
             bbox = parse_bbox_string(str(row["bbox"]))
             crop = _safe_crop(image, bbox.x, bbox.y, bbox.w, bbox.h, pad=pad)
-            crop = cv2.resize(crop, (img_size, img_size), interpolation=cv2.INTER_AREA)
+    
+            h, w = crop.shape[:2]
+            scale = min(img_size / w, img_size / h)
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            if keep_aspect_ratio:
+                new_w, new_h = int(round(w * scale)), int(round(h * scale))
+                resized = cv2.resize(crop, (new_w, new_h), interpolation=interp)
+
+                canvas = np.zeros((img_size, img_size, 3), dtype=crop.dtype)  # black padding
+                x0 = (img_size - new_w) // 2
+                y0 = (img_size - new_h) // 2
+                canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+                crop = canvas
+            else:
+                crop = cv2.resize(crop, (img_size, img_size), interpolation=cv2.INTER_AREA)
 
             row_id = str(row["row_id"])
             class_id = int(row["class_id"]) if is_train else -1

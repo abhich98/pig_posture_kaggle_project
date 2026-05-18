@@ -16,6 +16,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
+from torchvision.transforms import functional as TF
 
 from pig_pipeline.training.metrics import macro_f1
 from pig_pipeline.training.utills import (
@@ -571,56 +572,113 @@ def _precision_from_config(value: Any) -> str | int:
     return str(value)
 
 
+class RandomGamma:
+    """Randomly apply gamma correction to mimic exposure response changes."""
+
+    def __init__(
+        self,
+        p: float = 0.0,
+        gamma_min: float = 0.75,
+        gamma_max: float = 1.35,
+        gain: float = 1.0,
+    ) -> None:
+        self.p = float(p)
+        self.gamma_min = float(gamma_min)
+        self.gamma_max = float(gamma_max)
+        self.gain = float(gain)
+        if self.p < 0.0 or self.p > 1.0:
+            raise ValueError("augment.gamma_p must be in [0, 1]")
+        if self.gamma_min <= 0 or self.gamma_max <= 0:
+            raise ValueError("augment.gamma_min and augment.gamma_max must be > 0")
+        if self.gamma_min > self.gamma_max:
+            raise ValueError("augment.gamma_min must be <= augment.gamma_max")
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        if self.p <= 0.0 or torch.rand(1).item() >= self.p:
+            return image
+        gamma = float(torch.empty(1).uniform_(self.gamma_min, self.gamma_max).item())
+        return TF.adjust_gamma(image, gamma=gamma, gain=self.gain)
+
+
 def build_transforms(
     img_size: int, aug_cfg: dict[str, Any] | None = None
 ) -> tuple[transforms.Compose, transforms.Compose]:
     aug_cfg = aug_cfg or {}
     img_size = int(img_size)
+    affine_shear = float(aug_cfg.get("affine_shear", 5.0))
 
     train_transform = transforms.Compose(
         [
             transforms.RandomResizedCrop(
                 size=img_size,
                 scale=(
-                    float(aug_cfg.get("scale_min", 0.65)),
+                    float(aug_cfg.get("scale_min", 0.75)),
                     float(aug_cfg.get("scale_max", 1.0)),
                 ),
                 ratio=(
-                    float(aug_cfg.get("ratio_min", 0.75)),
-                    float(aug_cfg.get("ratio_max", 1.33)),
+                    float(aug_cfg.get("ratio_min", 0.85)),
+                    float(aug_cfg.get("ratio_max", 1.2)),
                 ),
                 interpolation=transforms.InterpolationMode.BILINEAR,
             ),
             transforms.RandomApply(
                 [
+                    transforms.RandomAffine(
+                        degrees=float(aug_cfg.get("affine_degrees", 10.0)),
+                        translate=(
+                            float(aug_cfg.get("affine_translate", 0.1)),
+                            float(aug_cfg.get("affine_translate", 0.1)),
+                        ),
+                        scale=(
+                            float(aug_cfg.get("affine_scale_min", 0.9)),
+                            float(aug_cfg.get("affine_scale_max", 1.1)),
+                        ),
+                        shear=(-affine_shear, affine_shear),
+                        interpolation=transforms.InterpolationMode.BILINEAR,
+                    )
+                ],
+                p=float(aug_cfg.get("affine_p", 0.7)),
+            ),
+            transforms.RandomApply(
+                [
                     transforms.ColorJitter(
-                        brightness=float(aug_cfg.get("brightness", 0.35)),
-                        contrast=float(aug_cfg.get("contrast", 0.35)),
-                        saturation=float(aug_cfg.get("saturation", 0.25)),
-                        hue=float(aug_cfg.get("hue", 0.06)),
+                        brightness=float(aug_cfg.get("brightness", 0.45)),
+                        contrast=float(aug_cfg.get("contrast", 0.4)),
+                        saturation=float(aug_cfg.get("saturation", 0.15)),
+                        hue=float(aug_cfg.get("hue", 0.03)),
                     )
                 ],
                 p=float(aug_cfg.get("color_p", 0.8)),
             ),
+            RandomGamma(
+                p=float(aug_cfg.get("gamma_p", 0.2)),
+                gamma_min=float(aug_cfg.get("gamma_min", 0.75)),
+                gamma_max=float(aug_cfg.get("gamma_max", 1.35)),
+            ),
+            transforms.RandomAutocontrast(p=float(aug_cfg.get("autocontrast_p", 0.12))),
+            transforms.RandomAdjustSharpness(
+                sharpness_factor=float(aug_cfg.get("sharpness_factor", 1.8)),
+                p=float(aug_cfg.get("sharpness_p", 0.12)),
+            ),
             transforms.RandomApply(
                 [transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))],
-                p=float(aug_cfg.get("blur_p", 0.2)),
+                p=float(aug_cfg.get("blur_p", 0.12)),
             ),
             transforms.RandomPerspective(
-                distortion_scale=float(aug_cfg.get("perspective", 0.2)),
+                distortion_scale=float(aug_cfg.get("perspective", 0.18)),
                 p=float(aug_cfg.get("perspective_p", 0.25)),
             ),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             transforms.RandomErasing(
-                p=float(aug_cfg.get("erasing_p", 0.25)),
+                p=float(aug_cfg.get("erasing_p", 0.18)),
                 scale=(
                     float(aug_cfg.get("erase_scale_min", 0.02)),
-                    float(aug_cfg.get("erase_scale_max", 0.2)),
+                    float(aug_cfg.get("erase_scale_max", 0.12)),
                 ),
                 ratio=(
-                    float(aug_cfg.get("erase_ratio_min", 0.3)),
-                    float(aug_cfg.get("erase_ratio_max", 3.3)),
+                    float(aug_cfg.get("erase_ratio_min", 0.5)),
+                    float(aug_cfg.get("erase_ratio_max", 2.0)),
                 ),
             ),
         ]
@@ -745,7 +803,20 @@ def train_torchvision_classifier(
         save_last=True,
     )
 
+    checkpoint_every_n_epochs = int(train_cfg.get("checkpoint_every_n_epochs", 0))
+    periodic_checkpoint_cb: pl.callbacks.ModelCheckpoint | None = None
+    if checkpoint_every_n_epochs > 0:
+        periodic_checkpoint_cb = pl.callbacks.ModelCheckpoint(
+            dirpath=str(out_dir),
+            filename="epoch{epoch:02d}",
+            save_top_k=-1,
+            every_n_epochs=checkpoint_every_n_epochs,
+            save_last=False,
+        )
+
     callbacks: list[pl.Callback] = [checkpoint_cb]
+    if periodic_checkpoint_cb is not None:
+        callbacks.append(periodic_checkpoint_cb)
     patience = int(train_cfg.get("early_stopping_patience", 0))
     if patience > 0:
         callbacks.append(
